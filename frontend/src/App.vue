@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { SavedTwoFaAccount, TwoFaTask } from './api/modules/twofa'
-import { Play, RefreshCcw, RotateCcw, Send, Square, Upload, X } from '@lucide/vue'
+import { LoaderCircle, Play, RefreshCcw, RotateCcw, Send, Square, Upload, X } from '@lucide/vue'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { controlTwoFaTask, getMigration, getSavedAccounts, getTwoFaScreen, getTwoFaStatus, getTwoFaTask, importMigration, reauthorizeTwoFaAccount, sendTwoFaInput, startTwoFaTask } from './api/modules/twofa'
 import { imageClickToViewport } from './manual-input.mjs'
+import { createRequestGate } from './operation.mjs'
 
 const text = ref('')
 const task = ref<TwoFaTask>()
@@ -19,6 +20,9 @@ const migrationLoading = ref(false)
 const savedAccounts = ref<SavedTwoFaAccount[]>([])
 const accountsLoading = ref(false)
 const accountActionId = ref<string>()
+const accountsRevision = ref(0)
+const accountsRequest = createRequestGate()
+const controlAction = ref<'cancel' | 'retry' | 'delete'>()
 let timer: ReturnType<typeof setTimeout> | undefined
 let accountsTimer: ReturnType<typeof setTimeout> | undefined
 let mounted = false
@@ -73,23 +77,24 @@ function scheduleAccountsRefresh() {
     accountsTimer = setTimeout(() => void refreshAccounts(), 60_000)
 }
 
-async function refreshAccounts() {
-  if (accountsLoading.value)
-    return
-  accountsLoading.value = true
-  try {
-    const result = await getSavedAccounts()
-    if (!Array.isArray(result.items))
-      throw new Error('插件返回了无效账号列表')
-    savedAccounts.value = result.items
-  }
-  catch (cause) {
-    error.value = message(cause)
-  }
-  finally {
-    accountsLoading.value = false
-    scheduleAccountsRefresh()
-  }
+function refreshAccounts() {
+  return accountsRequest.run(async () => {
+    accountsLoading.value = true
+    try {
+      const result = await getSavedAccounts()
+      if (!Array.isArray(result.items))
+        throw new Error('插件返回了无效账号列表')
+      savedAccounts.value = result.items
+      accountsRevision.value++
+    }
+    catch (cause) {
+      error.value = message(cause)
+    }
+    finally {
+      accountsLoading.value = false
+      scheduleAccountsRefresh()
+    }
+  })
 }
 
 async function upload(event: Event) {
@@ -124,6 +129,7 @@ async function start() {
       settings: { enabled: true, concurrencyLimit: null, weight: 1, groupIds: [] },
     })
     text.value = ''
+    notice.value = '授权任务已启动'
     schedule()
   }
   catch (cause) {
@@ -143,6 +149,7 @@ async function reauthorize(account: SavedTwoFaAccount) {
   try {
     task.value = await reauthorizeTwoFaAccount(account.id, { submissionId: crypto.randomUUID() })
     screen.value = ''
+    notice.value = '已开始重新授权'
     schedule()
     await refreshAccounts()
   }
@@ -189,8 +196,10 @@ async function poll() {
     else {
       screen.value = ''
     }
-    if (wasRunning && !task.value.running)
+    if (wasRunning && !task.value.running) {
+      notice.value = task.value.cancelled ? '授权任务已取消' : '授权任务已完成'
       await refreshAccounts()
+    }
     schedule()
   }
   catch (cause) {
@@ -202,6 +211,7 @@ async function poll() {
 async function control(action: 'cancel' | 'retry' | 'delete') {
   if (!task.value || loading.value)
     return
+  controlAction.value = action
   loading.value = true
   try {
     if (action === 'delete') {
@@ -211,6 +221,7 @@ async function control(action: 'cancel' | 'retry' | 'delete') {
     }
     else {
       task.value = await controlTwoFaTask(task.value.id, action)
+      notice.value = action === 'retry' ? '已重新排队失败账号' : '授权任务已取消'
       schedule()
     }
   }
@@ -219,6 +230,7 @@ async function control(action: 'cancel' | 'retry' | 'delete') {
   }
   finally {
     loading.value = false
+    controlAction.value = undefined
   }
 }
 
@@ -236,6 +248,7 @@ async function sendManual(input: ManualInput) {
     await sendTwoFaInput(task.value.id, waiting.id, data)
     manualText.value = ''
     screen.value = ''
+    notice.value = '人工操作已发送'
     schedule()
   }
   catch (cause) {
@@ -295,12 +308,16 @@ onBeforeUnmount(() => {
       </button>
     </header>
 
-    <p v-if="error" class="rounded-cp bg-cp-danger-container px-3 py-2 text-cp-sm text-cp-danger-on-container" role="alert">
-      {{ error }}
-    </p>
-    <p v-if="notice" class="rounded-cp bg-cp-success-container px-3 py-2 text-cp-sm text-cp-success-on-container">
-      {{ notice }}
-    </p>
+    <Transition name="cp-fade" mode="out-in">
+      <p v-if="error" :key="`error-${error}`" class="rounded-cp bg-cp-danger-container px-3 py-2 text-cp-sm text-cp-danger-on-container" role="alert">
+        {{ error }}
+      </p>
+    </Transition>
+    <Transition name="cp-fade" mode="out-in">
+      <p v-if="notice" :key="`notice-${notice}`" class="rounded-cp bg-cp-success-container px-3 py-2 text-cp-sm text-cp-success-on-container" aria-live="polite">
+        {{ notice }}
+      </p>
+    </Transition>
 
     <section class="grid gap-3 md:grid-cols-3" aria-label="运行状态">
       <div class="rounded-cp border border-cp-outline-variant p-3">
@@ -343,61 +360,66 @@ onBeforeUnmount(() => {
           </p>
         </div>
         <button class="cp-button cp-button-secondary inline-flex items-center gap-2" type="button" :disabled="accountsLoading || !!accountActionId" @click="refreshAccounts">
-          <RefreshCcw class="size-4" aria-hidden="true" />刷新账号
+          <LoaderCircle v-if="accountsLoading" class="size-4 cp-spin" aria-hidden="true" />
+          <RefreshCcw v-else class="size-4" aria-hidden="true" />
+          {{ accountsLoading ? '刷新中…' : '刷新账号' }}
         </button>
       </div>
-      <p v-if="accountsLoading && !savedAccounts.length" class="text-cp-sm text-cp-text-secondary">
-        正在读取账号状态…
-      </p>
-      <p v-else-if="!savedAccounts.length" class="text-cp-sm text-cp-text-secondary">
-        暂无账号状态
-      </p>
-      <div v-else class="overflow-x-auto rounded-cp border border-cp-outline-variant">
-        <table class="w-full min-w-[42rem] text-left text-cp-sm">
-          <thead class="border-b border-cp-outline-variant text-cp-xs text-cp-text-secondary">
-            <tr>
-              <th class="px-3 py-2 font-medium" scope="col">
-                邮箱
-              </th>
-              <th class="px-3 py-2 font-medium" scope="col">
-                状态
-              </th>
-              <th class="px-3 py-2 font-medium" scope="col">
-                凭据
-              </th>
-              <th class="px-3 py-2 font-medium" scope="col">
-                最近更新
-              </th>
-              <th class="px-3 py-2 text-right font-medium" scope="col">
-                操作
-              </th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-cp-outline-variant">
-            <tr v-for="account in savedAccounts" :key="account.id">
-              <td class="max-w-[18rem] truncate px-3 py-2 font-medium" :title="account.email">
-                {{ account.email }}
-              </td>
-              <td class="px-3 py-2">
-                <span>{{ accountStatus(account) }}</span>
-                <span v-if="accountReason(account)" class="mt-0.5 block text-cp-xs text-cp-danger">{{ accountReason(account) }}</span>
-              </td>
-              <td class="px-3 py-2 text-cp-text-secondary">
-                {{ account.saved ? '已保存' : '未保存' }}
-              </td>
-              <td class="px-3 py-2 text-cp-text-secondary">
-                {{ formatUpdatedAt(account.updatedAt) }}
-              </td>
-              <td class="px-3 py-2 text-right">
-                <button v-if="account.needsReauth" class="cp-button cp-button-primary text-cp-xs" type="button" :disabled="!!accountActionId || loading || !!task" @click="reauthorize(account)">
-                  {{ accountActionId === account.id ? '授权中…' : '一键重新授权' }}
-                </button>
-                <span v-else class="text-cp-xs text-cp-text-secondary">无需操作</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <Transition name="cp-fade" mode="out-in">
+        <p v-if="accountsLoading && !savedAccounts.length" key="accounts-loading" class="text-cp-sm text-cp-text-secondary" aria-live="polite">
+          正在读取账号状态…
+        </p>
+        <p v-else-if="!savedAccounts.length" key="accounts-empty" class="text-cp-sm text-cp-text-secondary">
+          暂无账号状态
+        </p>
+        <div v-else :key="`accounts-${accountsRevision}`" class="cp-list-enter-active overflow-x-auto rounded-cp border border-cp-outline-variant">
+          <table class="w-full min-w-[42rem] text-left text-cp-sm">
+            <thead class="border-b border-cp-outline-variant text-cp-xs text-cp-text-secondary">
+              <tr>
+                <th class="px-3 py-2 font-medium" scope="col">
+                  邮箱
+                </th>
+                <th class="px-3 py-2 font-medium" scope="col">
+                  状态
+                </th>
+                <th class="px-3 py-2 font-medium" scope="col">
+                  凭据
+                </th>
+                <th class="px-3 py-2 font-medium" scope="col">
+                  最近更新
+                </th>
+                <th class="px-3 py-2 text-right font-medium" scope="col">
+                  操作
+                </th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-cp-outline-variant">
+              <tr v-for="account in savedAccounts" :key="account.id">
+                <td class="max-w-[18rem] truncate px-3 py-2 font-medium" :title="account.email">
+                  {{ account.email }}
+                </td>
+                <td class="px-3 py-2">
+                  <span>{{ accountStatus(account) }}</span>
+                  <span v-if="accountReason(account)" class="mt-0.5 block text-cp-xs text-cp-danger">{{ accountReason(account) }}</span>
+                </td>
+                <td class="px-3 py-2 text-cp-text-secondary">
+                  {{ account.saved ? '已保存' : '未保存' }}
+                </td>
+                <td class="px-3 py-2 text-cp-text-secondary">
+                  {{ formatUpdatedAt(account.updatedAt) }}
+                </td>
+                <td class="px-3 py-2 text-right">
+                  <button v-if="account.needsReauth" class="cp-button cp-button-primary inline-flex items-center gap-1 text-cp-xs" type="button" :disabled="!!accountActionId || loading || !!task" @click="reauthorize(account)">
+                    <LoaderCircle v-if="accountActionId === account.id" class="size-3.5 cp-spin" aria-hidden="true" />
+                    {{ accountActionId === account.id ? '授权中…' : '一键重新授权' }}
+                  </button>
+                  <span v-else class="text-cp-xs text-cp-text-secondary">无需操作</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </Transition>
     </section>
 
     <section class="flex min-w-0 flex-col gap-3 rounded-cp border border-cp-outline-variant p-4">
@@ -414,7 +436,9 @@ onBeforeUnmount(() => {
       <div class="flex flex-wrap items-center justify-between gap-2 text-cp-xs text-cp-text-secondary">
         <span>最多 50 个账号；授权完成后只保存加密 2FA 信息</span>
         <button class="cp-button cp-button-primary inline-flex items-center gap-2" type="button" :disabled="loading || !!task || !text.trim()" @click="start">
-          <Play class="size-4" aria-hidden="true" />开始授权登录
+          <LoaderCircle v-if="loading" class="size-4 cp-spin" aria-hidden="true" />
+          <Play v-else class="size-4" aria-hidden="true" />
+          {{ loading ? '启动中…' : '开始授权登录' }}
         </button>
       </div>
     </section>
@@ -426,27 +450,31 @@ onBeforeUnmount(() => {
         </h2>
         <div class="flex flex-wrap gap-2">
           <button class="cp-button cp-button-secondary inline-flex items-center gap-2" type="button" :disabled="loading || task.running || task.cancelled" @click="control('retry')">
-            <RotateCcw class="size-4" aria-hidden="true" />重试失败项
+            <LoaderCircle v-if="controlAction === 'retry'" class="size-4 cp-spin" aria-hidden="true" />
+            <RotateCcw v-else class="size-4" aria-hidden="true" />{{ controlAction === 'retry' ? '重新排队中…' : '重试失败项' }}
           </button>
           <button class="cp-button cp-button-secondary inline-flex items-center gap-2" type="button" :disabled="loading || !task.running" @click="control('cancel')">
-            <Square class="size-4" aria-hidden="true" />取消任务
+            <LoaderCircle v-if="controlAction === 'cancel'" class="size-4 cp-spin" aria-hidden="true" />
+            <Square v-else class="size-4" aria-hidden="true" />{{ controlAction === 'cancel' ? '取消中…' : '取消任务' }}
           </button>
           <button class="cp-button cp-button-tertiary inline-flex items-center gap-2" type="button" :disabled="loading || task.running" @click="control('delete')">
             <X class="size-4" aria-hidden="true" />关闭
           </button>
         </div>
       </div>
-      <div class="divide-y divide-cp-outline-variant rounded-cp border border-cp-outline-variant">
-        <div v-for="item in task.items" :key="item.id" class="flex flex-wrap items-center gap-3 px-3 py-2 text-cp-sm">
+      <TransitionGroup name="cp-list" tag="div" class="divide-y divide-cp-outline-variant rounded-cp border border-cp-outline-variant">
+        <div v-for="item in task.items" :key="`${item.id}-${item.status}`" class="flex flex-wrap items-center gap-3 px-3 py-2 text-cp-sm">
           <span class="min-w-0 flex-1 truncate">{{ item.email }}</span>
           <span class="text-cp-text-secondary">{{ labels[item.status] || item.status }}</span>
           <span v-if="item.message" class="basis-full text-cp-xs text-cp-danger">{{ item.message }}</span>
         </div>
-      </div>
+      </TransitionGroup>
       <div v-if="screen" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div class="overflow-hidden rounded-cp border border-cp-outline-variant bg-black">
           <button class="block w-full cursor-crosshair appearance-none border-0 bg-transparent p-0 text-left disabled:cursor-wait" type="button" :disabled="loading" title="点击浏览器画面进行人工验证" @click="handleScreenClick">
-            <img ref="screenImage" class="block max-h-[32rem] w-full select-none object-contain" :src="screen" alt="等待人工验证的浏览器画面" draggable="false">
+            <Transition name="cp-screen" mode="out-in">
+              <img v-if="screen" :key="screen" ref="screenImage" class="block max-h-[32rem] w-full select-none object-contain" :src="screen" alt="等待人工验证的浏览器画面" draggable="false">
+            </Transition>
           </button>
         </div>
         <div class="flex flex-col gap-2">

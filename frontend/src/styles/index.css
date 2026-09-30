@@ -17,3 +17,63 @@ body {
 #app {
   min-height: inherit;
 }
+
+.cp-spin {
+  animation: cp-spin 900ms linear infinite;
+}
+
+@keyframes cp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cp-fade-enter-active,
+.cp-fade-leave-active,
+.cp-screen-enter-active,
+.cp-screen-leave-active,
+.cp-list-enter-active,
+.cp-list-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.cp-fade-enter-from,
+.cp-fade-leave-to,
+.cp-screen-enter-from,
+.cp-screen-leave-to,
+.cp-list-enter-from,
+.cp-list-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.cp-list-move {
+  transition: transform 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-spin {
+    animation: none;
+  }
+
+  .cp-fade-enter-active,
+  .cp-fade-leave-active,
+  .cp-screen-enter-active,
+  .cp-screen-leave-active,
+  .cp-list-enter-active,
+  .cp-list-leave-active,
+  .cp-list-move {
+    transition-duration: 1ms;
+  }
+
+  .cp-fade-enter-from,
+  .cp-fade-leave-to,
+  .cp-screen-enter-from,
+  .cp-screen-leave-to,
+  .cp-list-enter-from,
+  .cp-list-leave-to {
+    transform: none;
+  }
+}
