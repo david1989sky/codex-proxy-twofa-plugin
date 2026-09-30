@@ -80,6 +80,7 @@ test('plugin UI coalesces refreshes and shows operation feedback', async t => {
   await page.getByRole('button', { name: '开始授权登录' }).click()
   await page.getByRole('button', { name: '启动中…' }).waitFor()
   assert.equal(await page.locator('.cp-spin').count() > 0, true)
+  assert.equal(await page.locator('.cp-spin').first().evaluate(node => getComputedStyle(node).animationName), 'none')
   await page.evaluate(() => window.__releaseStart())
   await page.waitForTimeout(20)
 })
