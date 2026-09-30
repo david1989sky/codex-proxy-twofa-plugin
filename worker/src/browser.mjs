@@ -4,6 +4,7 @@ import { oauthTarget, PublicError } from './core.mjs'
 import { browserContextOptions, browserFingerprintInitScript } from './browser-profile.mjs'
 
 const viewport = { width: 1024, height: 768 }
+export const stageSettleMs = 350
 const keys = new Set(['Enter', 'Tab', 'Shift+Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'])
 
 async function visible(page, selectors) {
@@ -149,7 +150,7 @@ export function createBrowserRunner({ browser, upstream, allowedOrigin = 'https:
         const button = state.button || await visible(page, ['button[type="submit"]', 'button:has-text("Continue")', 'button:has-text("继续")'])
         if (!button) { lastActionAt = 0; continue }
         await button.click()
-        await delay(200)
+        await delay(stageSettleMs, undefined, { signal })
       }
       if (callbackError) throw callbackError
       signal.throwIfAborted()

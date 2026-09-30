@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 
 export class PublicError extends Error {
   constructor(statusCode, message) {
@@ -50,11 +51,12 @@ function erase(credentials) {
 export class Jobs {
   #jobs = new Map()
   #timer
-  constructor({ run, persist, leaseMs = 90000, maxAgeMs = 1800000 }) {
+  constructor({ run, persist, leaseMs = 90000, maxAgeMs = 1800000, retryDelayMs = 750 }) {
     this.run = run
     this.persist = persist
     this.leaseMs = leaseMs
     this.maxAgeMs = maxAgeMs
+    this.retryDelayMs = retryDelayMs
     this.#timer = setInterval(() => this.sweep(), Math.min(leaseMs, 10000))
     this.#timer.unref()
   }
@@ -99,10 +101,19 @@ export class Jobs {
     }
   }
 
-  #start(job) {
+  #start(job, initialDelayMs = 0) {
     job.running = true
     job.abort = new AbortController()
     job.promise = (async () => {
+      if (initialDelayMs > 0) {
+        try {
+          await delay(initialDelayMs, undefined, { signal: job.abort.signal })
+        }
+        catch (error) {
+          if (job.abort.signal.aborted) return
+          throw error
+        }
+      }
       for (const item of job.items) {
         if (job.cancelled || item.status !== 'queued') continue
         item.attempts++
@@ -156,7 +167,7 @@ export class Jobs {
       throw new PublicError(429, '登录任务繁忙，请稍后重试')
     failed.forEach(i => { i.status = 'queued' })
     job.cookie = cookie
-    this.#start(job)
+    this.#start(job, this.retryDelayMs)
     return this.read(id, owner)
   }
 

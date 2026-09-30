@@ -121,3 +121,21 @@ test('reauthorization locks the target across sessions and preserves committing 
   assert.equal(result.items[0].credentialsSaved, true)
   assert.equal(saved.password, 'private----password')
 })
+
+test('retry cooldown prevents an immediate second authorization attempt', async t => {
+  let attempts = 0
+  let secondStarted
+  const jobs = new Jobs({ retryDelayMs: 20, run: async () => {
+    attempts++
+    if (attempts === 1) throw new Error('fixture failure')
+    secondStarted = Date.now()
+    return { accountId: 'fixture-account' }
+  } })
+  t.after(() => jobs.close())
+  const task = jobs.create({ owner, cookie: 'cookie', submissionId: 'retry-cooldown', credentials: credentials(), settings: {} })
+  await settled(jobs, task.id)
+  jobs.retry(task.id, owner, 'cookie')
+  assert.equal(secondStarted, undefined)
+  await delay(25)
+  assert.ok(secondStarted)
+})
