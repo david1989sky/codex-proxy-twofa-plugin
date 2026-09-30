@@ -58,7 +58,7 @@ test('real browser completes password + TOTP + consent, masks takeover, validate
   })
   await new Promise(resolve => foreign.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise(resolve => foreign.close(resolve)))
-  const fields = (field, title, action) => `<h1>${title}</h1><form method="POST" action="${action}"><input ${field}><button type="submit">Continue</button></form>`
+  const fields = (field, title, action) => `<h1>${title}</h1><form method="POST" action="${action}"><input style="position:absolute;left:10px;top:10px" ${field}><button type="submit">Continue</button></form>`
   const server = createServer(async (req, res) => {
     let body = ''
     for await (const part of req) body += part
@@ -79,7 +79,7 @@ test('real browser completes password + TOTP + consent, masks takeover, validate
     }
     if (url.pathname === '/verified') {
       assert.ok(authenticator.check(params.get('totp'), secret))
-      if (manual) return html(fields('name="email_code" autofocus', 'Check your inbox', '/consent'))
+      if (manual) return html(fields('name="email_code"', 'Check your inbox', '/consent'))
     }
     if (url.pathname === '/verified' || url.pathname === '/consent') return html('<h1>Consent</h1><form method="POST" action="/callback"><button name="authorize">Allow</button></form>')
     if (url.pathname === '/callback') {
@@ -119,6 +119,7 @@ test('real browser completes password + TOTP + consent, masks takeover, validate
   await run({ ...input(), update: (stage, controls) => {
     if (stage === 'waiting') void (async () => {
       assert.ok((await controls.screen()).byteLength > 1000)
+      await controls.input({ kind: 'click', x: 50, y: 20 })
       await controls.input({ kind: 'text', text: '123456' })
       await controls.input({ kind: 'key', key: 'Enter' })
       await controls.input({ kind: 'resume' })

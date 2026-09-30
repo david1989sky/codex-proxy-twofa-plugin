@@ -3,6 +3,7 @@ import type { SavedTwoFaAccount, TwoFaTask } from './api/modules/twofa'
 import { Play, RefreshCcw, RotateCcw, Send, Square, Upload, X } from '@lucide/vue'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { controlTwoFaTask, getMigration, getSavedAccounts, getTwoFaScreen, getTwoFaStatus, getTwoFaTask, importMigration, reauthorizeTwoFaAccount, sendTwoFaInput, startTwoFaTask } from './api/modules/twofa'
+import { imageClickToViewport } from './manual-input.mjs'
 
 const text = ref('')
 const task = ref<TwoFaTask>()
@@ -11,6 +12,7 @@ const migration = ref<{ legacyVaultMounted: boolean, imported: boolean, marker?:
 const error = ref('')
 const notice = ref('')
 const screen = ref('')
+const screenImage = ref<HTMLImageElement>()
 const manualText = ref('')
 const loading = ref(false)
 const migrationLoading = ref(false)
@@ -220,13 +222,17 @@ async function control(action: 'cancel' | 'retry' | 'delete') {
   }
 }
 
-async function sendManual(kind: 'text' | 'key' | 'resume') {
+type ManualInput = 'text' | 'key' | 'resume' | { kind: 'click', x: number, y: number }
+
+async function sendManual(input: ManualInput) {
   const waiting = task.value?.items.find(item => item.status === 'waiting')
   if (!task.value || !waiting || loading.value)
     return
   loading.value = true
   try {
-    const data = kind === 'text' ? { kind, text: manualText.value } : kind === 'key' ? { kind, key: 'Enter' } : { kind }
+    const data = typeof input === 'string'
+      ? input === 'text' ? { kind: input, text: manualText.value } : input === 'key' ? { kind: input, key: 'Enter' } : { kind: input }
+      : input
     await sendTwoFaInput(task.value.id, waiting.id, data)
     manualText.value = ''
     screen.value = ''
@@ -238,6 +244,12 @@ async function sendManual(kind: 'text' | 'key' | 'resume') {
   finally {
     loading.value = false
   }
+}
+
+function handleScreenClick(event: MouseEvent) {
+  const input = imageClickToViewport(event, screenImage.value)
+  if (input)
+    void sendManual(input)
 }
 
 async function migrate() {
@@ -433,7 +445,9 @@ onBeforeUnmount(() => {
       </div>
       <div v-if="screen" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div class="overflow-hidden rounded-cp border border-cp-outline-variant bg-black">
-          <img class="block max-h-[32rem] w-full object-contain" :src="screen" alt="等待人工验证的浏览器画面">
+          <button class="block w-full cursor-crosshair appearance-none border-0 bg-transparent p-0 text-left disabled:cursor-wait" type="button" :disabled="loading" title="点击浏览器画面进行人工验证" @click="handleScreenClick">
+            <img ref="screenImage" class="block max-h-[32rem] w-full select-none object-contain" :src="screen" alt="等待人工验证的浏览器画面" draggable="false">
+          </button>
         </div>
         <div class="flex flex-col gap-2">
           <input v-model="manualText" class="w-full rounded-cp border border-cp-outline px-3 py-2 text-cp-sm" placeholder="输入验证码或文本" :disabled="loading">

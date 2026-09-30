@@ -11,6 +11,7 @@
     "build": "vue-tsc -b && vite build",
     "dev": "vite --host 127.0.0.1",
     "lint": "eslint .",
+    "test": "node --test test/*.test.mjs",
     "typecheck": "vue-tsc -b --pretty false",
     "preview": "vite preview --host 127.0.0.1"
   },
