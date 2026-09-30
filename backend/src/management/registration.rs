@@ -19,6 +19,7 @@ pub(crate) fn registration() -> ManagementRegistration {
     ManagementRegistration {
         routes: vec![
             get("api/status"),
+            get("api/accounts"),
             get("api/migration"),
             post("api/migration/import"),
             post("api/request"),
@@ -38,5 +39,21 @@ pub(crate) fn registration() -> ManagementRegistration {
             icon: None,
         }],
         callbacks: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::registration;
+
+    #[test]
+    fn registers_saved_account_summary_route() {
+        let registration = registration();
+        assert!(
+            registration
+                .routes
+                .iter()
+                .any(|route| route.method == "GET" && route.path == "api/accounts")
+        );
     }
 }

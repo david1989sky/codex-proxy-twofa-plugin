@@ -13,6 +13,16 @@ export interface TwoFaStatus {
   legacyVaultMounted: boolean
 }
 
+export interface SavedTwoFaAccount {
+  id: string
+  email: string
+  status: string
+  errorReason?: 'credential_invalid' | 'credential_expired'
+  saved: boolean
+  needsReauth: boolean
+  updatedAt?: string
+}
+
 export interface TwoFaSettings {
   enabled: boolean
   concurrencyLimit: number | null
@@ -24,6 +34,10 @@ export interface TwoFaSettings {
 
 export function getTwoFaStatus() {
   return getJson<TwoFaStatus>('api/status')
+}
+
+export function getSavedAccounts() {
+  return getJson<{ items: SavedTwoFaAccount[] }>('api/accounts')
 }
 
 export function getMigration() {

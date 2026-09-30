@@ -26,7 +26,7 @@ export async function request<T>(body: Record<string, unknown>): Promise<T> {
   return value as T
 }
 
-export async function getJson<T>(path: 'api/status' | 'api/migration'): Promise<T> {
+export async function getJson<T>(path: 'api/status' | 'api/migration' | 'api/accounts'): Promise<T> {
   const reply = await getHost().request({ method: 'GET', path })
   const text = new TextDecoder().decode(reply.body)
   if (reply.status < 200 || reply.status >= 300)

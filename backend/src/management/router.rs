@@ -121,11 +121,28 @@ async fn route(state: PluginState, call: TypedCall<ManagementRequest>) -> ApiRes
     require_no_query(&call.request)?;
     match (call.request.method.as_str(), call.request.path.as_str()) {
         ("GET", "api/status") => status(state).await,
+        ("GET", "api/accounts") => accounts(state, call).await,
         ("GET", "api/migration") => migration(state, call).await,
         ("POST", "api/migration/import") => import_migration(state, call).await,
         ("POST", "api/request") => request(state, call).await,
         _ => Err(ApiError::new(404, "not_found", "未找到插件管理接口")),
     }
+}
+
+async fn accounts(state: PluginState, call: TypedCall<ManagementRequest>) -> ApiResult {
+    let request = ManagementRequest {
+        method: "GET".to_owned(),
+        path: "api/accounts".to_owned(),
+        query: String::new(),
+        content_type: None,
+        headers: call.request.headers,
+    };
+    let response = state
+        .worker
+        .forward(&request, &[])
+        .await
+        .map_err(|error| ApiError::from_worker(503, error.to_string()))?;
+    forward_response(response)
 }
 
 async fn status(state: PluginState) -> ApiResult {

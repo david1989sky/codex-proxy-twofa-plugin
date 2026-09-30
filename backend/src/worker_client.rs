@@ -134,6 +134,9 @@ fn worker_path(method: &str, path: &str) -> Option<String> {
     if method == "GET" && path == "api/status" {
         return Some("/health".to_owned());
     }
+    if method == "GET" && path == "api/accounts" {
+        return Some("/api/admin/twofa/accounts".to_owned());
+    }
     if path == "api/migration" || path == "api/migration/import" {
         return None;
     }
@@ -145,7 +148,6 @@ fn worker_path(method: &str, path: &str) -> Option<String> {
     }
     let mapped = if allowed == "tasks"
         || allowed.starts_with("tasks/")
-        || allowed == "accounts"
         || allowed.starts_with("accounts/")
     {
         format!("/api/admin/twofa/{allowed}")
@@ -190,6 +192,11 @@ mod tests {
     fn maps_only_supported_worker_paths() {
         assert_eq!(worker_path("GET", "api/status"), Some("/health".to_owned()));
         assert_eq!(
+            worker_path("GET", "api/accounts"),
+            Some("/api/admin/twofa/accounts".to_owned())
+        );
+        assert_eq!(worker_path("POST", "api/accounts"), None);
+        assert_eq!(
             worker_path("GET", "api/accounts/a/credentials"),
             Some("/api/admin/twofa/accounts/a".to_owned())
         );
@@ -198,6 +205,44 @@ mod tests {
             Some("/api/admin/twofa/tasks/id/cancel".to_owned())
         );
         assert_eq!(worker_path("GET", "api/unknown"), None);
+    }
+
+    #[tokio::test]
+    async fn forwards_saved_account_listing_to_worker() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let size = stream.read(&mut chunk).expect("read request");
+                if size == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..size]);
+            }
+            let request = String::from_utf8(request).expect("request headers");
+            assert!(request.starts_with("GET /api/admin/twofa/accounts HTTP/1.1"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 32\r\nConnection: close\r\n\r\n{\"code\":200,\"data\":{\"items\":[]}}")
+                .expect("response");
+        });
+
+        let client =
+            super::WorkerClient::new(&format!("http://127.0.0.1:{port}")).expect("worker client");
+        let request = ManagementRequest {
+            method: "GET".to_owned(),
+            path: "api/accounts".to_owned(),
+            query: String::new(),
+            content_type: None,
+            headers: Vec::new(),
+        };
+        let response = client.forward(&request, &[]).await.expect("response");
+
+        assert_eq!(response.status, StatusCode::OK.as_u16());
+        assert_eq!(response.body, br#"{"items":[]}"#);
+        server.join().expect("server");
     }
 
     #[test]

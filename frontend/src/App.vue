@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { TwoFaTask } from './api/modules/twofa'
+import type { SavedTwoFaAccount, TwoFaTask } from './api/modules/twofa'
 import { Play, RefreshCcw, RotateCcw, Send, Square, Upload, X } from '@lucide/vue'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { controlTwoFaTask, getMigration, getTwoFaScreen, getTwoFaStatus, getTwoFaTask, importMigration, sendTwoFaInput, startTwoFaTask } from './api/modules/twofa'
+import { controlTwoFaTask, getMigration, getSavedAccounts, getTwoFaScreen, getTwoFaStatus, getTwoFaTask, importMigration, reauthorizeTwoFaAccount, sendTwoFaInput, startTwoFaTask } from './api/modules/twofa'
 
 const text = ref('')
 const task = ref<TwoFaTask>()
@@ -14,7 +14,12 @@ const screen = ref('')
 const manualText = ref('')
 const loading = ref(false)
 const migrationLoading = ref(false)
+const savedAccounts = ref<SavedTwoFaAccount[]>([])
+const accountsLoading = ref(false)
+const accountActionId = ref<string>()
 let timer: ReturnType<typeof setTimeout> | undefined
+let accountsTimer: ReturnType<typeof setTimeout> | undefined
+let mounted = false
 
 const labels: Record<string, string> = {
   queued: '排队中',
@@ -30,6 +35,21 @@ const labels: Record<string, string> = {
   cancelled: '已取消',
 }
 
+const accountStatusLabels: Record<string, string> = {
+  normal: '正常',
+  active: '正常',
+  quota_exhausted: '配额耗尽',
+  rate_limited: '限流中',
+  error: '异常',
+  disabled: '已停用',
+  pending: '处理中',
+}
+
+const accountReasonLabels: Record<string, string> = {
+  credential_invalid: '登录凭据失效',
+  credential_expired: '登录凭据过期',
+}
+
 function message(cause: unknown) {
   return cause instanceof Error ? cause.message : '操作失败'
 }
@@ -41,6 +61,32 @@ async function refresh() {
   }
   catch (cause) {
     error.value = message(cause)
+  }
+  await refreshAccounts()
+}
+
+function scheduleAccountsRefresh() {
+  clearTimeout(accountsTimer)
+  if (mounted)
+    accountsTimer = setTimeout(() => void refreshAccounts(), 60_000)
+}
+
+async function refreshAccounts() {
+  if (accountsLoading.value)
+    return
+  accountsLoading.value = true
+  try {
+    const result = await getSavedAccounts()
+    if (!Array.isArray(result.items))
+      throw new Error('插件返回了无效账号列表')
+    savedAccounts.value = result.items
+  }
+  catch (cause) {
+    error.value = message(cause)
+  }
+  finally {
+    accountsLoading.value = false
+    scheduleAccountsRefresh()
   }
 }
 
@@ -86,6 +132,41 @@ async function start() {
   }
 }
 
+async function reauthorize(account: SavedTwoFaAccount) {
+  if (!account.needsReauth || accountActionId.value || loading.value || task.value)
+    return
+  accountActionId.value = account.id
+  error.value = ''
+  notice.value = ''
+  try {
+    task.value = await reauthorizeTwoFaAccount(account.id, { submissionId: crypto.randomUUID() })
+    screen.value = ''
+    schedule()
+    await refreshAccounts()
+  }
+  catch (cause) {
+    error.value = message(cause)
+  }
+  finally {
+    accountActionId.value = undefined
+  }
+}
+
+function accountStatus(account: SavedTwoFaAccount) {
+  return accountStatusLabels[account.status] || '未知'
+}
+
+function accountReason(account: SavedTwoFaAccount) {
+  return account.errorReason ? accountReasonLabels[account.errorReason] : ''
+}
+
+function formatUpdatedAt(value?: string) {
+  if (!value)
+    return '暂无记录'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '暂无记录' : date.toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' })
+}
+
 function schedule() {
   clearTimeout(timer)
   if (task.value)
@@ -96,6 +177,7 @@ async function poll() {
   if (!task.value)
     return
   try {
+    const wasRunning = task.value.running
     task.value = await getTwoFaTask(task.value.id)
     const waiting = task.value.items.find(item => item.status === 'waiting')
     if (waiting) {
@@ -105,6 +187,8 @@ async function poll() {
     else {
       screen.value = ''
     }
+    if (wasRunning && !task.value.running)
+      await refreshAccounts()
     schedule()
   }
   catch (cause) {
@@ -172,8 +256,15 @@ async function migrate() {
   }
 }
 
-onMounted(() => void refresh())
-onBeforeUnmount(() => clearTimeout(timer))
+onMounted(() => {
+  mounted = true
+  void refresh()
+})
+onBeforeUnmount(() => {
+  mounted = false
+  clearTimeout(timer)
+  clearTimeout(accountsTimer)
+})
 </script>
 
 <template>
@@ -187,7 +278,7 @@ onBeforeUnmount(() => clearTimeout(timer))
           批量导入 OpenAI OAuth 账号，必要时接管浏览器完成验证
         </p>
       </div>
-      <button class="cp-button cp-button-secondary inline-flex items-center gap-2" type="button" :disabled="loading || migrationLoading" @click="refresh">
+      <button class="cp-button cp-button-secondary inline-flex items-center gap-2" type="button" :disabled="loading || migrationLoading || accountsLoading || !!accountActionId" @click="refresh">
         <RefreshCcw class="size-4" aria-hidden="true" />刷新状态
       </button>
     </header>
@@ -226,6 +317,74 @@ onBeforeUnmount(() => clearTimeout(timer))
             确认迁移
           </button>
         </div>
+      </div>
+    </section>
+
+    <section class="flex min-w-0 flex-col gap-3 rounded-cp border border-cp-outline-variant p-4" aria-labelledby="saved-accounts-title">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 id="saved-accounts-title" class="text-cp-lg font-medium">
+            账号状态
+          </h2>
+          <p class="mt-1 text-cp-xs text-cp-text-secondary">
+            仅显示 OpenAI OAuth 账号的安全摘要
+          </p>
+        </div>
+        <button class="cp-button cp-button-secondary inline-flex items-center gap-2" type="button" :disabled="accountsLoading || !!accountActionId" @click="refreshAccounts">
+          <RefreshCcw class="size-4" aria-hidden="true" />刷新账号
+        </button>
+      </div>
+      <p v-if="accountsLoading && !savedAccounts.length" class="text-cp-sm text-cp-text-secondary">
+        正在读取账号状态…
+      </p>
+      <p v-else-if="!savedAccounts.length" class="text-cp-sm text-cp-text-secondary">
+        暂无账号状态
+      </p>
+      <div v-else class="overflow-x-auto rounded-cp border border-cp-outline-variant">
+        <table class="w-full min-w-[42rem] text-left text-cp-sm">
+          <thead class="border-b border-cp-outline-variant text-cp-xs text-cp-text-secondary">
+            <tr>
+              <th class="px-3 py-2 font-medium" scope="col">
+                邮箱
+              </th>
+              <th class="px-3 py-2 font-medium" scope="col">
+                状态
+              </th>
+              <th class="px-3 py-2 font-medium" scope="col">
+                凭据
+              </th>
+              <th class="px-3 py-2 font-medium" scope="col">
+                最近更新
+              </th>
+              <th class="px-3 py-2 text-right font-medium" scope="col">
+                操作
+              </th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-cp-outline-variant">
+            <tr v-for="account in savedAccounts" :key="account.id">
+              <td class="max-w-[18rem] truncate px-3 py-2 font-medium" :title="account.email">
+                {{ account.email }}
+              </td>
+              <td class="px-3 py-2">
+                <span>{{ accountStatus(account) }}</span>
+                <span v-if="accountReason(account)" class="mt-0.5 block text-cp-xs text-cp-danger">{{ accountReason(account) }}</span>
+              </td>
+              <td class="px-3 py-2 text-cp-text-secondary">
+                {{ account.saved ? '已保存' : '未保存' }}
+              </td>
+              <td class="px-3 py-2 text-cp-text-secondary">
+                {{ formatUpdatedAt(account.updatedAt) }}
+              </td>
+              <td class="px-3 py-2 text-right">
+                <button v-if="account.needsReauth" class="cp-button cp-button-primary text-cp-xs" type="button" :disabled="!!accountActionId || loading || !!task" @click="reauthorize(account)">
+                  {{ accountActionId === account.id ? '授权中…' : '一键重新授权' }}
+                </button>
+                <span v-else class="text-cp-xs text-cp-text-secondary">无需操作</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
