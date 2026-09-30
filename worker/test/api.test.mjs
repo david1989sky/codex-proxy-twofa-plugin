@@ -17,6 +17,48 @@ const upstream = async (path, cookie) => {
   if (path === '/api/auth/status') return { authenticated: !!cookie, session: { role: cookie.includes('admin') ? 'admin' : 'key' } }
   return {}
 }
+
+test('saved account summaries are paginated, filtered, and credential-free', async t => {
+  const accounts = [
+    { id: 'invalid', email: 'invalid@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'error', errorReason: 'credential_invalid', errorMessage: 'private upstream error', updatedAt: '2026-09-30T00:00:00.000Z' },
+    { id: 'expired', email: 'expired@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'error', errorReason: 'credential_expired', errorMessage: 'private upstream error', updatedAt: '2026-09-30T00:01:00.000Z' },
+    { id: 'healthy', email: 'healthy@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'active', errorReason: null, errorMessage: null, updatedAt: '2026-09-30T00:02:00.000Z' },
+    { id: 'revoked', email: 'revoked@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'error', errorReason: 'credential_revoked', errorMessage: 'private upstream error', updatedAt: '2026-09-30T00:03:00.000Z' },
+    { id: 'api-key', email: 'key@example.com', provider: 'openai', authenticationKind: 'api_key', status: 'active', updatedAt: '2026-09-30T00:04:00.000Z' },
+    { id: 'xai', email: 'xai@example.com', provider: 'xai', authenticationKind: 'oauth', status: 'error', errorReason: 'credential_invalid', updatedAt: '2026-09-30T00:05:00.000Z' },
+  ]
+  const upstreamWithAccounts = async (path, cookie) => {
+    if (path === '/api/auth/status') return upstream(path, cookie)
+    if (path === '/api/admin/accounts?page=1&pageSize=100') return { items: accounts.slice(0, 3), page: { totalPages: 2 } }
+    if (path === '/api/admin/accounts?page=2&pageSize=100') return { items: accounts.slice(3), page: { totalPages: 2 } }
+    throw new Error(`unexpected upstream request: ${path}`)
+  }
+  const saved = new Set(['invalid', 'expired', 'revoked'])
+  const app = await createApp({
+    origin,
+    upstream: upstreamWithAccounts,
+    run: async () => ({}),
+    vault: { get: async id => saved.has(id) ? { credentials: { email: `${id}@example.com`, password: 'private-password', totpSecret: 'PRIVATE-TOTP' }, updatedAt: `vault-${id}` } : null },
+  })
+  t.after(() => app.close())
+  const response = await app.inject({ method: 'GET', url: `${prefix}/accounts`, headers })
+  assert.equal(response.statusCode, 200)
+  const items = response.json().data.items
+  assert.deepEqual(items.map(item => item.id), ['invalid', 'expired', 'healthy', 'revoked'])
+  assert.equal(items.find(item => item.id === 'invalid').needsReauth, true)
+  assert.equal(items.find(item => item.id === 'expired').needsReauth, true)
+  assert.equal(items.find(item => item.id === 'revoked').needsReauth, false)
+  assert.equal(items.find(item => item.id === 'healthy').needsReauth, false)
+  assert.equal(items.find(item => item.id === 'healthy').saved, false)
+  for (const item of items) {
+    assert.deepEqual(Object.keys(item).sort(), ['email', 'errorReason', 'id', 'needsReauth', 'saved', 'status', 'updatedAt'].filter(key => item[key] !== undefined).sort())
+  }
+  assert.ok(!response.body.includes('private-password'))
+  assert.ok(!response.body.includes('PRIVATE-TOTP'))
+  assert.ok(!response.body.includes('private upstream error'))
+  assert.ok(!response.body.includes('credential_revoked'))
+})
+
 test('admin guard rejects anonymous/key sessions and cross-origin/missing CSRF headers', async t => {
   const app = await createApp({ origin, upstream, run: async () => ({ accountId: 'ok' }) })
   t.after(() => app.close())

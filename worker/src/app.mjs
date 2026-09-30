@@ -51,6 +51,7 @@ async function resolveProxy(id, cookie, upstream, proxyMap, requireTest = true) 
 export async function createApp({ origin, upstream, run, vault, proxyMap = {}, leaseMs }) {
   const app = Fastify({ logger: false, bodyLimit: 140000, disableRequestLogging: true, ajv: { customOptions: { removeAdditional: false } } })
   const accountOperations = new Set()
+  const reauthReasons = new Set(['credential_invalid', 'credential_expired'])
   async function withAccountLock(id, action) {
     if (accountOperations.has(id)) throw new PublicError(409, '此账号的 2FA 信息正在使用，请稍后重试')
     accountOperations.add(id)
@@ -116,6 +117,29 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
   })
   const ok = data => ({ code: 200, message: 'ok', data })
   app.get('/health', () => ok({ ready: true }))
+  app.get(`${prefix}/accounts`, async request => {
+    requireVault()
+    const items = []
+    for (let page = 1; page <= 100; page++) {
+      const data = await upstream(`/api/admin/accounts?page=${page}&pageSize=100`, request.sessionCookie)
+      for (const account of Array.isArray(data?.items) ? data.items : []) {
+        if (account?.provider !== 'openai' || account?.authenticationKind !== 'oauth' || !account.id || !account.email) continue
+        const saved = await vault.get(account.id)
+        const reason = reauthReasons.has(account.errorReason) ? account.errorReason : undefined
+        items.push({
+          id: account.id,
+          email: account.email,
+          status: account.status,
+          errorReason: reason,
+          saved: !!saved,
+          needsReauth: !!saved && account.status === 'error' && !!reason,
+          updatedAt: account.updatedAt ?? saved?.updatedAt,
+        })
+      }
+      if (page >= (Number(data?.page?.totalPages) || page)) break
+    }
+    return ok({ items })
+  })
   const accountParams = { type: 'object', required: ['accountId'], properties: { accountId: { type: 'string', minLength: 1, maxLength: 128 } } }
   app.get(`${prefix}/accounts/:accountId`, { schema: { params: accountParams } }, async request => {
     requireVault()
