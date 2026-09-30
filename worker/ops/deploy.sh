@@ -7,6 +7,7 @@ COMPOSE_DIR="$(dirname -- "$COMPOSE_FILE")"
 BACKUP_DIR="$ROOT/backup/twofa-worker"
 IMAGE="${WORKER_IMAGE:?WORKER_IMAGE must be an immutable GHCR image reference}"
 ORIGIN="${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}"
+WORKER_CONTAINER="${CPR_TWOFA_WORKER_CONTAINER:-cpr-twofa-worker}"
 
 case "$IMAGE" in
   *@sha256:* ) ;;
@@ -31,11 +32,33 @@ export CPR_TWOFA_ROOT="$ROOT"
 
 docker pull "$IMAGE"
 bash "$COMPOSE_DIR/provision-vault.sh"
-docker compose -p cpr-twofa -f "$COMPOSE_FILE" up -d --no-build worker
+
+# Recreate explicitly so container-network workers bind to the current RS namespace.
+if docker inspect "$WORKER_CONTAINER" >/dev/null 2>&1; then
+  docker rm -f "$WORKER_CONTAINER" >/dev/null
+fi
+docker compose -p cpr-twofa -f "$COMPOSE_FILE" up -d --no-build --force-recreate worker
+
+worker_ready() {
+  docker exec "$WORKER_CONTAINER" node -e 'fetch("http://127.0.0.1:28082/health").then(async response => { const body = await response.text(); if (!response.ok || !body.includes(`"ready":true`)) process.exit(1) }).catch(() => process.exit(1))'
+
+  local network_mode target worker_pid target_pid worker_ns target_ns
+  network_mode="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$WORKER_CONTAINER")"
+  case "$network_mode" in
+    container:*)
+      target="${network_mode#container:}"
+      worker_pid="$(docker inspect -f '{{.State.Pid}}' "$WORKER_CONTAINER")"
+      target_pid="$(docker inspect -f '{{.State.Pid}}' "$target")"
+      worker_ns="$(readlink "/proc/$worker_pid/ns/net")"
+      target_ns="$(readlink "/proc/$target_pid/ns/net")"
+      [[ -n "$worker_ns" && "$worker_ns" == "$target_ns" ]]
+      ;;
+  esac
+}
 
 ready=0
 for _ in $(seq 1 45); do
-  if curl --fail --silent --max-time 3 http://127.0.0.1:28082/health | grep -q '"ready":true'; then
+  if worker_ready; then
     ready=1
     break
   fi

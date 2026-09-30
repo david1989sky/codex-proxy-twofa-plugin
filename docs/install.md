@@ -51,7 +51,7 @@ export WORKER_IMAGE=ghcr.io/david1989sky/codex-proxy-twofa-worker:v0.2.0@sha256:
 sudo -E bash companion-update.sh
 ```
 
-脚本会把当前镜像摘要保存到 `/opt/cpr-twofa/backup/twofa-worker/previous-image`，启动新镜像并执行健康检查。RS 插件包随后在「插件管理」中上传更新；启用前确认它的 `workerImageDigest` 与 Worker 清单一致。
+脚本会把当前镜像摘要保存到 `/opt/cpr-twofa/backup/twofa-worker/previous-image`，强制重建 Worker 并执行健康检查；使用 `container:` 网络模式时还会确认 Worker 与当前 RS 容器共享网络命名空间。RS 插件包随后在「插件管理」中上传更新；启用前确认它的 `workerImageDigest` 与 Worker 清单一致。
 
 ## 回滚
 

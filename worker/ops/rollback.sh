@@ -7,6 +7,7 @@ COMPOSE_DIR="$(dirname -- "$COMPOSE_FILE")"
 BACKUP_DIR="$ROOT/backup/twofa-worker"
 IMAGE_FILE="$BACKUP_DIR/previous-image"
 ORIGIN_FILE="$BACKUP_DIR/current-origin"
+WORKER_CONTAINER="${CPR_TWOFA_WORKER_CONTAINER:-cpr-twofa-worker}"
 
 if [[ "${1:-}" == "--check" ]]; then
   [[ -s "$COMPOSE_FILE" && -s "$IMAGE_FILE" && -s "$ORIGIN_FILE" ]]
@@ -27,9 +28,31 @@ export WORKER_IMAGE="$IMAGE"
 export PUBLIC_ORIGIN="$ORIGIN"
 export CPR_TWOFA_ROOT="$ROOT"
 docker pull "$IMAGE"
-docker compose -p cpr-twofa -f "$COMPOSE_FILE" up -d --no-build worker
+
+if docker inspect "$WORKER_CONTAINER" >/dev/null 2>&1; then
+  docker rm -f "$WORKER_CONTAINER" >/dev/null
+fi
+docker compose -p cpr-twofa -f "$COMPOSE_FILE" up -d --no-build --force-recreate worker
+
+worker_ready() {
+  docker exec "$WORKER_CONTAINER" node -e 'fetch("http://127.0.0.1:28082/health").then(async response => { const body = await response.text(); if (!response.ok || !body.includes(`"ready":true`)) process.exit(1) }).catch(() => process.exit(1))'
+
+  local network_mode target worker_pid target_pid worker_ns target_ns
+  network_mode="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$WORKER_CONTAINER")"
+  case "$network_mode" in
+    container:*)
+      target="${network_mode#container:}"
+      worker_pid="$(docker inspect -f '{{.State.Pid}}' "$WORKER_CONTAINER")"
+      target_pid="$(docker inspect -f '{{.State.Pid}}' "$target")"
+      worker_ns="$(readlink "/proc/$worker_pid/ns/net")"
+      target_ns="$(readlink "/proc/$target_pid/ns/net")"
+      [[ -n "$worker_ns" && "$worker_ns" == "$target_ns" ]]
+      ;;
+  esac
+}
+
 for _ in $(seq 1 45); do
-  if curl --fail --silent --max-time 3 http://127.0.0.1:28082/health | grep -q '"ready":true'; then
+  if worker_ready; then
     cp -p "$BACKUP_DIR/current-image" "$BACKUP_DIR/failed-image" 2>/dev/null || true
     printf '%s\n' "$IMAGE" > "$BACKUP_DIR/current-image"
     printf '%s\n' 'Companion Worker rolled back.'
