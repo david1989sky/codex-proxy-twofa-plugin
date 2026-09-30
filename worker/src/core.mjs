@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 
 export class PublicError extends Error {
   constructor(statusCode, message) {
@@ -50,11 +51,12 @@ function erase(credentials) {
 export class Jobs {
   #jobs = new Map()
   #timer
-  constructor({ run, persist, leaseMs = 90000, maxAgeMs = 1800000 }) {
+  constructor({ run, persist, leaseMs = 90000, maxAgeMs = 1800000, retryDelayMs = 750 }) {
     this.run = run
     this.persist = persist
     this.leaseMs = leaseMs
     this.maxAgeMs = maxAgeMs
+    this.retryDelayMs = retryDelayMs
     this.#timer = setInterval(() => this.sweep(), Math.min(leaseMs, 10000))
     this.#timer.unref()
   }
@@ -99,10 +101,19 @@ export class Jobs {
     }
   }
 
-  #start(job) {
+  #start(job, initialDelayMs = 0) {
     job.running = true
     job.abort = new AbortController()
     job.promise = (async () => {
+      if (initialDelayMs > 0) {
+        try {
+          await delay(initialDelayMs, undefined, { signal: job.abort.signal })
+        }
+        catch (error) {
+          if (job.abort.signal.aborted) return
+          throw error
+        }
+      }
       for (const item of job.items) {
         if (job.cancelled || item.status !== 'queued') continue
         item.attempts++
@@ -154,9 +165,9 @@ export class Jobs {
       throw new PublicError(409, '已有登录任务正在执行')
     if ([...this.#jobs.values()].filter(j => j.running).length >= 2)
       throw new PublicError(429, '登录任务繁忙，请稍后重试')
-    failed.forEach(i => { i.status = 'queued' })
+    failed.forEach(i => { i.status = 'queued'; i.message = undefined })
     job.cookie = cookie
-    this.#start(job)
+    this.#start(job, this.retryDelayMs)
     return this.read(id, owner)
   }
 
@@ -166,7 +177,7 @@ export class Jobs {
     job.abort.abort()
     job.items.forEach(item => {
       if (item.status !== 'importing') erase(item.credentials)
-      if (item.status === 'queued') item.status = 'cancelled'
+      if (item.status === 'queued') { item.status = 'cancelled'; item.message = '已取消' }
     })
     return this.read(id, owner)
   }

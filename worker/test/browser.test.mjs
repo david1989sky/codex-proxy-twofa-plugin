@@ -3,9 +3,12 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { chromium } from 'playwright'
 import { authenticator } from 'otplib'
-import { createBrowserRunner } from '../src/browser.mjs'
+import { createBrowserRunner, stageSettleMs } from '../src/browser.mjs'
 
 const secret = 'JBSWY3DPEHPK3PXP'
+test('browser stages have time to settle after automatic submission', () => {
+  assert.ok(stageSettleMs >= 350)
+})
 test('init-script failure closes the browser context', async () => {
   let closed = 0
   const browser = { newContext: async () => ({ close: async () => { closed++ }, addInitScript: async () => { throw new Error('fixture init failure') } }) }

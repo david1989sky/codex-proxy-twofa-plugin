@@ -29,10 +29,12 @@ jobs:
       - run: pnpm --dir frontend install --frozen-lockfile
       - run: pnpm --dir frontend run typecheck
       - run: pnpm --dir frontend run lint
+      - run: pnpm --dir frontend run test
       - run: pnpm --dir frontend run build
       - run: npm --prefix worker ci --ignore-scripts --no-audit --no-fund
       - run: npx --prefix worker playwright install --with-deps chromium
       - run: npm --prefix worker test
+      - run: node --test worker/test/plugin-ui.e2e.mjs
       - run: cargo +1.97.0 fmt --manifest-path backend/Cargo.toml -- --check
       - run: cargo +1.97.0 clippy --manifest-path backend/Cargo.toml --all-targets --all-features --locked -- -D warnings
       - run: cargo +1.97.0 test --manifest-path backend/Cargo.toml --locked

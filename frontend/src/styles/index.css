@@ -17,3 +17,97 @@ body {
 #app {
   min-height: inherit;
 }
+
+.cp-action {
+  min-width: 7rem;
+  justify-content: center;
+}
+
+.cp-action-start {
+  min-width: 9rem;
+  justify-content: center;
+}
+
+.cp-stage {
+  display: inline-block;
+  min-width: 6rem;
+  text-align: right;
+  animation: cp-stage 180ms ease-out;
+}
+
+@keyframes cp-stage {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.cp-spin {
+  animation: cp-spin 900ms linear infinite;
+}
+
+@keyframes cp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cp-fade-enter-active,
+.cp-fade-leave-active,
+.cp-list-enter-active,
+.cp-list-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.cp-fade-enter-from,
+.cp-fade-leave-to,
+.cp-list-enter-from,
+.cp-list-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.cp-screen {
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.cp-screen-visible {
+  opacity: 1;
+  animation: cp-stage 180ms ease-out;
+}
+
+.cp-list-move {
+  transition: transform 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-spin,
+  .cp-stage,
+  .cp-screen-visible {
+    animation: none;
+  }
+
+  .cp-fade-enter-active,
+  .cp-fade-leave-active,
+  .cp-list-enter-active,
+  .cp-list-leave-active,
+  .cp-list-move {
+    transition-duration: 1ms;
+  }
+
+  .cp-fade-enter-from,
+  .cp-fade-leave-to,
+  .cp-list-enter-from,
+  .cp-list-leave-to {
+    transform: none;
+  }
+
+  .cp-screen {
+    transition-duration: 1ms;
+  }
+}
