@@ -15,17 +15,60 @@ const settingsSchema = {
   },
 }
 
-export function makeUpstream(base, origin) {
+export function makeUpstream(base, origin, { retryDelayMs = 500, requestTimeoutMs = 15000, attemptTimeoutMs = 5000 } = {}) {
+  const failureMessage = 'Codex Proxy 接口请求失败，请检查服务和登录状态'
+  const networkCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'])
+  const isTransientNetworkError = error => error?.name === 'TimeoutError' || networkCodes.has(error?.cause?.code ?? error?.code)
   return async (path, cookie, body) => {
-    const response = await fetch(new URL(path, base), {
-      method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(30000),
-      headers: { cookie, origin, 'content-type': 'application/json' },
-      body: body ? JSON.stringify(body) : undefined,
+    const attempts = body ? 1 : 3
+    const deadline = performance.now() + requestTimeoutMs
+    const requestSignal = body ? undefined : AbortSignal.timeout(requestTimeoutMs)
+    const waitForRetry = attempt => new Promise((resolve, reject) => {
+      if (requestSignal.aborted || performance.now() >= deadline) {
+        reject(new PublicError(502, failureMessage))
+        return
+      }
+      const onAbort = () => {
+        clearTimeout(timer)
+        reject(new PublicError(502, failureMessage))
+      }
+      const timer = setTimeout(() => {
+        requestSignal.removeEventListener('abort', onAbort)
+        resolve()
+      }, retryDelayMs * attempt)
+      requestSignal.addEventListener('abort', onAbort, { once: true })
     })
-    const envelope = await response.json().catch(() => null)
-    if (!response.ok || envelope?.code !== 200)
-      throw new PublicError([401, 403, 404].includes(response.status) ? response.status : 502, 'Codex Proxy 接口请求失败，请检查服务和登录状态')
-    return envelope.data
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (!body && (requestSignal.aborted || performance.now() >= deadline)) throw new PublicError(502, failureMessage)
+      const signal = body ? AbortSignal.timeout(30000) : AbortSignal.any([requestSignal, AbortSignal.timeout(attemptTimeoutMs)])
+      try {
+        const response = await fetch(new URL(path, base), {
+          method: body ? 'POST' : 'GET', redirect: 'error', signal,
+          headers: { cookie, origin, 'content-type': 'application/json' },
+          body: body ? JSON.stringify(body) : undefined,
+        })
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => {})
+          if (attempt < attempts && [502, 503, 504].includes(response.status)) {
+            await waitForRetry(attempt)
+            continue
+          }
+          throw new PublicError([401, 403, 404].includes(response.status) ? response.status : 502, failureMessage)
+        }
+        const envelope = await response.json().catch(error => {
+          if (signal.aborted) throw signal.reason
+          if (isTransientNetworkError(error)) throw error
+          return null
+        })
+        if (envelope?.code !== 200) throw new PublicError(502, failureMessage)
+        return envelope.data
+      } catch (error) {
+        if (error instanceof PublicError) throw error
+        if (attempt === attempts || requestSignal?.aborted || !isTransientNetworkError(error)) throw new PublicError(502, failureMessage)
+        await waitForRetry(attempt)
+      }
+    }
   }
 }
 

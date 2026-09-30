@@ -165,7 +165,7 @@ export class Jobs {
       throw new PublicError(409, '已有登录任务正在执行')
     if ([...this.#jobs.values()].filter(j => j.running).length >= 2)
       throw new PublicError(429, '登录任务繁忙，请稍后重试')
-    failed.forEach(i => { i.status = 'queued' })
+    failed.forEach(i => { i.status = 'queued'; i.message = undefined })
     job.cookie = cookie
     this.#start(job, this.retryDelayMs)
     return this.read(id, owner)
@@ -177,7 +177,7 @@ export class Jobs {
     job.abort.abort()
     job.items.forEach(item => {
       if (item.status !== 'importing') erase(item.credentials)
-      if (item.status === 'queued') item.status = 'cancelled'
+      if (item.status === 'queued') { item.status = 'cancelled'; item.message = '已取消' }
     })
     return this.read(id, owner)
   }

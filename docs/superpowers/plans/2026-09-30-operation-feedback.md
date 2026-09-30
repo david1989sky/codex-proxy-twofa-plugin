@@ -8,6 +8,8 @@
 
 **Tech Stack:** Vue 3 + TypeScript + Tailwind CSS、Node.js 22、Playwright、Node test runner。
 
+**Verified implementation (2026-09-30):** 前端请求合并与操作反馈、Worker 冷却、综合本地验证均已完成。账号表、任务行和截图保持稳定节点；阶段文本单独淡入，避免列表 revision 和截图替换导致滚动或点击丢失。实际 UI 回归位于 `worker/test/plugin-ui.e2e.mjs`。GET 重试最多三次，共享 15 秒总预算、单次最多 5 秒，POST 不重放。Worker 48/48、前端 3/3、插件 UI E2E 5/5、Rust 7/7、lint/build、fmt/clippy 和 diff 检查通过。版本更新为 0.1.9，发布和生产验证在本地验证后执行。
+
 ---
 
 ### Task 1: 前端请求去重与操作反馈
@@ -23,7 +25,7 @@
 
 - [ ] **Step 2: Add animated controls and state transitions**
 
-引入 `LoaderCircle` 图标；开始授权、刷新账号、重新授权、重试、取消和人工输入按钮在忙碌时显示旋转图标与动作文本。用 `Transition`/`TransitionGroup` 包裹告警、账号列表、任务项和人工验证截图，使列表刷新和状态变化淡入；给刷新后的账号列表增加 revision key 以重新触发一次过渡。
+引入 `LoaderCircle` 图标；开始授权、刷新账号、重新授权、重试、取消和人工输入按钮在忙碌时显示旋转图标与动作文本。告警和首次出现的状态淡入；账号表、任务行和人工验证截图保持稳定节点，任务阶段文本单独淡入。
 
 - [ ] **Step 3: Add reduced-motion CSS**
 

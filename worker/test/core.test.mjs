@@ -139,3 +139,21 @@ test('retry cooldown prevents an immediate second authorization attempt', async 
   await delay(25)
   assert.ok(secondStarted)
 })
+
+test('cancelling a retry during cooldown prevents login and clears the old failure', async t => {
+  let attempts = 0
+  const jobs = new Jobs({ retryDelayMs: 200, run: async () => {
+    attempts++
+    throw new Error('fixture failure')
+  } })
+  t.after(() => jobs.close())
+  const task = jobs.create({ owner, cookie: 'cookie', submissionId: 'cancel-cooldown', credentials: credentials(), settings: {} })
+  await settled(jobs, task.id)
+  const queued = jobs.retry(task.id, owner, 'cookie')
+  assert.equal(queued.items[0].message, undefined)
+  jobs.cancel(task.id, owner)
+  const cancelled = await settled(jobs, task.id)
+  assert.equal(attempts, 1)
+  assert.equal(cancelled.items[0].status, 'cancelled')
+  assert.equal(cancelled.items[0].message, '已取消')
+})

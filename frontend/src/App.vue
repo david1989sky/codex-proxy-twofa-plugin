@@ -16,16 +16,20 @@ const screen = ref('')
 const screenImage = ref<HTMLImageElement>()
 const manualText = ref('')
 const loading = ref(false)
+const starting = ref(false)
+const refreshing = ref(false)
 const migrationLoading = ref(false)
 const savedAccounts = ref<SavedTwoFaAccount[]>([])
 const accountsLoading = ref(false)
 const accountActionId = ref<string>()
-const accountsRevision = ref(0)
 const accountsRequest = createRequestGate()
+const statusRequest = createRequestGate()
 const controlAction = ref<'cancel' | 'retry' | 'delete'>()
+const manualAction = ref<'text' | 'key' | 'resume' | 'click'>()
 let timer: ReturnType<typeof setTimeout> | undefined
 let accountsTimer: ReturnType<typeof setTimeout> | undefined
 let mounted = false
+let taskEpoch = 0
 
 const labels: Record<string, string> = {
   queued: '排队中',
@@ -60,15 +64,21 @@ function message(cause: unknown) {
   return cause instanceof Error ? cause.message : '操作失败'
 }
 
-async function refresh() {
-  error.value = ''
-  try {
-    ;[status.value, migration.value] = await Promise.all([getTwoFaStatus(), getMigration()])
-  }
-  catch (cause) {
-    error.value = message(cause)
-  }
-  await refreshAccounts()
+function refresh() {
+  return statusRequest.run(async () => {
+    refreshing.value = true
+    error.value = ''
+    try {
+      ;[status.value, migration.value] = await Promise.all([getTwoFaStatus(), getMigration()])
+      await refreshAccounts()
+    }
+    catch (cause) {
+      error.value = message(cause)
+    }
+    finally {
+      refreshing.value = false
+    }
+  })
 }
 
 function scheduleAccountsRefresh() {
@@ -85,7 +95,6 @@ function refreshAccounts() {
       if (!Array.isArray(result.items))
         throw new Error('插件返回了无效账号列表')
       savedAccounts.value = result.items
-      accountsRevision.value++
     }
     catch (cause) {
       error.value = message(cause)
@@ -117,9 +126,10 @@ async function upload(event: Event) {
 }
 
 async function start() {
-  if (loading.value || task.value || !text.value.trim())
+  if (loading.value || accountActionId.value || task.value || !text.value.trim())
     return
   loading.value = true
+  starting.value = true
   error.value = ''
   notice.value = ''
   try {
@@ -137,6 +147,7 @@ async function start() {
   }
   finally {
     loading.value = false
+    starting.value = false
   }
 }
 
@@ -178,19 +189,26 @@ function formatUpdatedAt(value?: string) {
 
 function schedule() {
   clearTimeout(timer)
-  if (task.value)
+  if (mounted && task.value?.running)
     timer = setTimeout(() => void poll(), 1500)
 }
 
 async function poll() {
   if (!task.value)
     return
+  const taskId = task.value.id
+  const epoch = taskEpoch
   try {
     const wasRunning = task.value.running
-    task.value = await getTwoFaTask(task.value.id)
+    const updatedTask = await getTwoFaTask(taskId)
+    if (!mounted || task.value?.id !== taskId || taskEpoch !== epoch)
+      return
+    task.value = updatedTask
     const waiting = task.value.items.find(item => item.status === 'waiting')
     if (waiting) {
       const frame = await getTwoFaScreen(task.value.id, waiting.id)
+      if (!mounted || task.value?.id !== taskId || taskEpoch !== epoch)
+        return
       screen.value = frame.image
     }
     else {
@@ -203,6 +221,8 @@ async function poll() {
     schedule()
   }
   catch (cause) {
+    if (!mounted || taskEpoch !== epoch)
+      return
     error.value = message(cause)
     clearTimeout(timer)
   }
@@ -213,6 +233,9 @@ async function control(action: 'cancel' | 'retry' | 'delete') {
     return
   controlAction.value = action
   loading.value = true
+  taskEpoch++
+  clearTimeout(timer)
+  error.value = ''
   try {
     if (action === 'delete') {
       await controlTwoFaTask(task.value.id, action)
@@ -231,6 +254,7 @@ async function control(action: 'cancel' | 'retry' | 'delete') {
   finally {
     loading.value = false
     controlAction.value = undefined
+    schedule()
   }
 }
 
@@ -240,22 +264,30 @@ async function sendManual(input: ManualInput) {
   const waiting = task.value?.items.find(item => item.status === 'waiting')
   if (!task.value || !waiting || loading.value)
     return
+  manualAction.value = typeof input === 'string' ? input : input.kind
   loading.value = true
+  error.value = ''
+  taskEpoch++
+  clearTimeout(timer)
   try {
     const data = typeof input === 'string'
       ? input === 'text' ? { kind: input, text: manualText.value } : input === 'key' ? { kind: input, key: 'Enter' } : { kind: input }
       : input
     await sendTwoFaInput(task.value.id, waiting.id, data)
-    manualText.value = ''
-    screen.value = ''
+    if (manualAction.value === 'text')
+      manualText.value = ''
+    if (manualAction.value === 'resume')
+      screen.value = ''
     notice.value = '人工操作已发送'
-    schedule()
+    await poll()
   }
   catch (cause) {
     error.value = message(cause)
   }
   finally {
     loading.value = false
+    manualAction.value = undefined
+    schedule()
   }
 }
 
@@ -266,6 +298,8 @@ function handleScreenClick(event: MouseEvent) {
 }
 
 async function migrate() {
+  if (migrationLoading.value)
+    return
   migrationLoading.value = true
   error.value = ''
   try {
@@ -287,6 +321,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   mounted = false
+  taskEpoch++
   clearTimeout(timer)
   clearTimeout(accountsTimer)
 })
@@ -303,8 +338,9 @@ onBeforeUnmount(() => {
           批量导入 OpenAI OAuth 账号，必要时接管浏览器完成验证
         </p>
       </div>
-      <button class="cp-button cp-button-secondary inline-flex items-center gap-2" type="button" :disabled="loading || migrationLoading || accountsLoading || !!accountActionId" @click="refresh">
-        <RefreshCcw class="size-4" aria-hidden="true" />刷新状态
+      <button class="cp-button cp-button-secondary cp-action inline-flex items-center gap-2" type="button" :disabled="refreshing || loading || migrationLoading || accountsLoading || !!accountActionId" :aria-busy="refreshing" @click="refresh">
+        <LoaderCircle v-if="refreshing" class="size-4 cp-spin" aria-hidden="true" />
+        <RefreshCcw v-else class="size-4" aria-hidden="true" />{{ refreshing ? '刷新中…' : '刷新状态' }}
       </button>
     </header>
 
@@ -359,7 +395,7 @@ onBeforeUnmount(() => {
             仅显示 OpenAI OAuth 账号的安全摘要
           </p>
         </div>
-        <button class="cp-button cp-button-secondary inline-flex items-center gap-2" type="button" :disabled="accountsLoading || !!accountActionId" @click="refreshAccounts">
+        <button class="cp-button cp-button-secondary cp-action inline-flex items-center gap-2" type="button" :disabled="accountsLoading || !!accountActionId" :aria-busy="accountsLoading" @click="refreshAccounts">
           <LoaderCircle v-if="accountsLoading" class="size-4 cp-spin" aria-hidden="true" />
           <RefreshCcw v-else class="size-4" aria-hidden="true" />
           {{ accountsLoading ? '刷新中…' : '刷新账号' }}
@@ -372,7 +408,7 @@ onBeforeUnmount(() => {
         <p v-else-if="!savedAccounts.length" key="accounts-empty" class="text-cp-sm text-cp-text-secondary">
           暂无账号状态
         </p>
-        <div v-else :key="`accounts-${accountsRevision}`" class="cp-list-enter-active overflow-x-auto rounded-cp border border-cp-outline-variant">
+        <div v-else key="accounts-table" class="overflow-x-auto rounded-cp border border-cp-outline-variant" :aria-busy="accountsLoading">
           <table class="w-full min-w-[42rem] text-left text-cp-sm">
             <thead class="border-b border-cp-outline-variant text-cp-xs text-cp-text-secondary">
               <tr>
@@ -432,13 +468,13 @@ onBeforeUnmount(() => {
           <input id="twofa-upload" class="sr-only" type="file" accept=".txt,text/plain" @change="upload">
         </label>
       </div>
-      <textarea id="twofa-text" v-model="text" aria-label="账号列表" class="min-h-40 w-full rounded-cp border border-cp-outline bg-cp-surface px-3 py-2 font-mono text-cp-sm outline-none focus:border-cp-primary" placeholder="每行：邮箱----密码----2FA密钥" :disabled="loading || !!task" />
+      <textarea id="twofa-text" v-model="text" aria-label="账号列表" class="min-h-40 w-full rounded-cp border border-cp-outline bg-cp-surface px-3 py-2 font-mono text-cp-sm outline-none focus:border-cp-primary" placeholder="每行：邮箱----密码----2FA密钥" :disabled="loading || !!accountActionId || !!task" />
       <div class="flex flex-wrap items-center justify-between gap-2 text-cp-xs text-cp-text-secondary">
         <span>最多 50 个账号；授权完成后只保存加密 2FA 信息</span>
-        <button class="cp-button cp-button-primary inline-flex items-center gap-2" type="button" :disabled="loading || !!task || !text.trim()" @click="start">
-          <LoaderCircle v-if="loading" class="size-4 cp-spin" aria-hidden="true" />
+        <button class="cp-button cp-button-primary cp-action-start inline-flex items-center gap-2" type="button" :disabled="loading || !!accountActionId || !!task || !text.trim()" :aria-busy="starting" @click="start">
+          <LoaderCircle v-if="starting" class="size-4 cp-spin" aria-hidden="true" />
           <Play v-else class="size-4" aria-hidden="true" />
-          {{ loading ? '启动中…' : '开始授权登录' }}
+          {{ starting ? '启动中…' : '开始授权登录' }}
         </button>
       </div>
     </section>
@@ -463,30 +499,29 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <TransitionGroup name="cp-list" tag="div" class="divide-y divide-cp-outline-variant rounded-cp border border-cp-outline-variant">
-        <div v-for="item in task.items" :key="`${item.id}-${item.status}`" class="flex flex-wrap items-center gap-3 px-3 py-2 text-cp-sm">
+        <div v-for="item in task.items" :key="item.id" class="flex flex-wrap items-center gap-3 px-3 py-2 text-cp-sm">
           <span class="min-w-0 flex-1 truncate">{{ item.email }}</span>
-          <span class="text-cp-text-secondary">{{ labels[item.status] || item.status }}</span>
+          <span :key="item.status" class="cp-stage text-cp-text-secondary" aria-live="polite">{{ labels[item.status] || item.status }}</span>
           <span v-if="item.message" class="basis-full text-cp-xs text-cp-danger">{{ item.message }}</span>
         </div>
       </TransitionGroup>
       <div v-if="screen" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div class="overflow-hidden rounded-cp border border-cp-outline-variant bg-black">
           <button class="block w-full cursor-crosshair appearance-none border-0 bg-transparent p-0 text-left disabled:cursor-wait" type="button" :disabled="loading" title="点击浏览器画面进行人工验证" @click="handleScreenClick">
-            <Transition name="cp-screen" mode="out-in">
-              <img v-if="screen" :key="screen" ref="screenImage" class="block max-h-[32rem] w-full select-none object-contain" :src="screen" alt="等待人工验证的浏览器画面" draggable="false">
-            </Transition>
+            <img ref="screenImage" class="cp-screen block max-h-[32rem] w-full select-none object-contain" :class="{ 'cp-screen-visible': screen }" :src="screen" alt="等待人工验证的浏览器画面" draggable="false">
           </button>
         </div>
         <div class="flex flex-col gap-2">
           <input v-model="manualText" class="w-full rounded-cp border border-cp-outline px-3 py-2 text-cp-sm" placeholder="输入验证码或文本" :disabled="loading">
-          <button class="cp-button cp-button-primary inline-flex items-center justify-center gap-2" type="button" :disabled="loading || !manualText" @click="sendManual('text')">
-            <Send class="size-4" aria-hidden="true" />发送文本
+          <button class="cp-button cp-button-primary inline-flex items-center justify-center gap-2" type="button" :disabled="loading || !manualText" :aria-busy="manualAction === 'text'" @click="sendManual('text')">
+            <LoaderCircle v-if="manualAction === 'text'" class="size-4 cp-spin" aria-hidden="true" />
+            <Send v-else class="size-4" aria-hidden="true" />{{ manualAction === 'text' ? '发送中…' : '发送文本' }}
           </button>
-          <button class="cp-button cp-button-secondary" type="button" :disabled="loading" @click="sendManual('key')">
-            发送 Enter
+          <button class="cp-button cp-button-secondary inline-flex items-center justify-center gap-2" type="button" :disabled="loading" :aria-busy="manualAction === 'key'" @click="sendManual('key')">
+            <LoaderCircle v-if="manualAction === 'key'" class="size-4 cp-spin" aria-hidden="true" />{{ manualAction === 'key' ? '发送中…' : '发送 Enter' }}
           </button>
-          <button class="cp-button cp-button-tertiary" type="button" :disabled="loading" @click="sendManual('resume')">
-            继续自动流程
+          <button class="cp-button cp-button-tertiary inline-flex items-center justify-center gap-2" type="button" :disabled="loading" :aria-busy="manualAction === 'resume'" @click="sendManual('resume')">
+            <LoaderCircle v-if="manualAction === 'resume'" class="size-4 cp-spin" aria-hidden="true" />{{ manualAction === 'resume' ? '继续中…' : '继续自动流程' }}
           </button>
         </div>
       </div>
