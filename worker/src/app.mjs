@@ -175,7 +175,7 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
           status: account.status,
           errorReason: reason,
           saved: !!saved,
-          needsReauth: !!saved && account.status === 'error' && !!reason,
+          needsReauth: !!saved && account.status === 'error',
           updatedAt: account.updatedAt ?? saved?.updatedAt,
         })
       }

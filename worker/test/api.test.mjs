@@ -24,6 +24,7 @@ test('saved account summaries are paginated, filtered, and credential-free', asy
     { id: 'expired', email: 'expired@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'error', errorReason: 'credential_expired', errorMessage: 'private upstream error', updatedAt: '2026-09-30T00:01:00.000Z' },
     { id: 'healthy', email: 'healthy@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'active', errorReason: null, errorMessage: null, updatedAt: '2026-09-30T00:02:00.000Z' },
     { id: 'revoked', email: 'revoked@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'error', errorReason: 'credential_revoked', errorMessage: 'private upstream error', updatedAt: '2026-09-30T00:03:00.000Z' },
+    { id: 'unknown-error', email: 'unknown@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'error', errorReason: null, errorMessage: 'private upstream error', updatedAt: '2026-09-30T00:03:30.000Z' },
     { id: 'api-key', email: 'key@example.com', provider: 'openai', authenticationKind: 'api_key', status: 'active', updatedAt: '2026-09-30T00:04:00.000Z' },
     { id: 'xai', email: 'xai@example.com', provider: 'xai', authenticationKind: 'oauth', status: 'error', errorReason: 'credential_invalid', updatedAt: '2026-09-30T00:05:00.000Z' },
   ]
@@ -33,7 +34,7 @@ test('saved account summaries are paginated, filtered, and credential-free', asy
     if (path === '/api/admin/accounts?page=2&pageSize=100') return { items: accounts.slice(3), page: { totalPages: 2 } }
     throw new Error(`unexpected upstream request: ${path}`)
   }
-  const saved = new Set(['invalid', 'expired', 'revoked'])
+  const saved = new Set(['invalid', 'expired', 'revoked', 'unknown-error'])
   const app = await createApp({
     origin,
     upstream: upstreamWithAccounts,
@@ -44,10 +45,11 @@ test('saved account summaries are paginated, filtered, and credential-free', asy
   const response = await app.inject({ method: 'GET', url: `${prefix}/accounts`, headers })
   assert.equal(response.statusCode, 200)
   const items = response.json().data.items
-  assert.deepEqual(items.map(item => item.id), ['invalid', 'expired', 'healthy', 'revoked'])
+  assert.deepEqual(items.map(item => item.id), ['invalid', 'expired', 'healthy', 'revoked', 'unknown-error'])
   assert.equal(items.find(item => item.id === 'invalid').needsReauth, true)
   assert.equal(items.find(item => item.id === 'expired').needsReauth, true)
-  assert.equal(items.find(item => item.id === 'revoked').needsReauth, false)
+  assert.equal(items.find(item => item.id === 'revoked').needsReauth, true)
+  assert.equal(items.find(item => item.id === 'unknown-error').needsReauth, true)
   assert.equal(items.find(item => item.id === 'healthy').needsReauth, false)
   assert.equal(items.find(item => item.id === 'healthy').saved, false)
   for (const item of items) {

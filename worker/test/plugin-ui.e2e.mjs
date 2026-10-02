@@ -74,13 +74,17 @@ test('plugin UI coalesces refreshes and shows operation feedback', async t => {
       },
     }
     window.__accountsReady = new Promise(resolve => { window.__releaseAccounts = resolve })
-  }, { accountData: { items: [{ id: 'fixture', email: 'fixture@example.com', status: 'normal', saved: true, needsReauth: false }] } })
+  }, { accountData: { items: [
+    { id: 'fixture', email: 'fixture@example.com', status: 'normal', saved: true, needsReauth: false },
+    { id: 'reauthorize', email: 'reauthorize@example.com', status: 'error', errorReason: 'credential_revoked', saved: true, needsReauth: true },
+  ] } })
   await page.goto(`http://127.0.0.1:${server.address().port}/`)
 
   const refresh = page.locator('button').filter({ hasText: /刷新账号|刷新中/ }).first()
   await refresh.waitFor()
   await page.evaluate(() => window.__releaseAccounts())
   await page.getByText('fixture@example.com', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '一键重新授权', exact: true }).waitFor()
   const accountCallsBefore = calls.filter(call => call.path === 'api/accounts').length
 
   await page.evaluate(() => {
