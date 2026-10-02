@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the Codex Proxy 2FA Worker network binding
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+RandomizedDelaySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

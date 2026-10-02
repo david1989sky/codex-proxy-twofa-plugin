@@ -1,0 +1,9 @@
+[Unit]
+Description=Rebind Codex Proxy 2FA Worker to the current RS network namespace
+After=docker.service
+Requires=docker.service
+ConditionPathExists=/opt/cpr-twofa/release/codex-proxy-twofa-worker/ops/compose.yaml
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cpr-twofa-rebind-worker
