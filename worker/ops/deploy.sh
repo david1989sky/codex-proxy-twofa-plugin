@@ -8,12 +8,17 @@ BACKUP_DIR="$ROOT/backup/twofa-worker"
 IMAGE="${WORKER_IMAGE:?WORKER_IMAGE must be an immutable GHCR image reference}"
 ORIGIN="${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}"
 WORKER_CONTAINER="${CPR_TWOFA_WORKER_CONTAINER:-cpr-twofa-worker}"
+RS_CONTAINER="${CPR_TWOFA_RS_CONTAINER:-codex-proxy-rs-v380-codex-proxy-rs-1}"
 
 case "$IMAGE" in
   *@sha256:* ) ;;
   *) printf '%s\n' 'WORKER_IMAGE must include an immutable @sha256 digest.' >&2; exit 1 ;;
 esac
 [[ -f "$COMPOSE_FILE" ]] || { printf 'Compose file not found: %s\n' "$COMPOSE_FILE" >&2; exit 1; }
+[[ "$(docker inspect -f '{{.State.Running}}' "$RS_CONTAINER" 2>/dev/null || true)" == true ]] || {
+  printf 'RS container is not running: %s\n' "$RS_CONTAINER" >&2
+  exit 1
+}
 mkdir -p "$BACKUP_DIR"
 chmod 0700 "$BACKUP_DIR"
 
@@ -29,6 +34,7 @@ printf '%s\n' "$ORIGIN" > "$BACKUP_DIR/current-origin.next"
 export WORKER_IMAGE="$IMAGE"
 export PUBLIC_ORIGIN="$ORIGIN"
 export CPR_TWOFA_ROOT="$ROOT"
+export CPR_TWOFA_RS_CONTAINER="$RS_CONTAINER"
 
 docker pull "$IMAGE"
 bash "$COMPOSE_DIR/provision-vault.sh"

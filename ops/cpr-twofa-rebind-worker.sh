@@ -52,4 +52,5 @@ origin="$(<"$ORIGIN_FILE")"
 
 printf 'Worker network namespace changed (%s -> %s); recreating Worker.\n' "$worker_ns" "$rs_ns"
 WORKER_IMAGE="$image" PUBLIC_ORIGIN="$origin" CPR_TWOFA_ROOT="$ROOT" \
+  CPR_TWOFA_RS_CONTAINER="$RS_CONTAINER" \
   bash "$COMPOSE_DIR/deploy.sh"

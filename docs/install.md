@@ -27,10 +27,11 @@ sha256sum -c codex-proxy-twofa-worker-0.1.0.tar.gz.sha256
 export PUBLIC_ORIGIN=https://cx.subarx.com
 export WORKER_IMAGE=ghcr.io/david1989sky/codex-proxy-twofa-worker:v0.1.0@sha256:c2ac501b6e5892b42a2caba35a2c681d866b1a2863887bb7b82b9b532596158e
 export WORKER_BUNDLE=/path/to/codex-proxy-twofa-worker-0.1.0.tar.gz
+export CPR_TWOFA_RS_CONTAINER=codex-proxy-rs-v380-codex-proxy-rs-1
 sudo -E bash companion-install.sh
 ```
 
-脚本会把 Worker 放到 `/opt/cpr-twofa/release/codex-proxy-twofa-worker`，使用现有的 `/opt/cpr-twofa/data/credentials` 和 `/opt/cpr-twofa/secrets/twofa-key` 挂载，并等待 `http://127.0.0.1:28082/health` 返回 `ready=true`。空凭据目录首次安装时才会生成密钥；已有数据但缺少密钥会停止部署。
+`CPR_TWOFA_RS_CONTAINER` 必须是当前 RS 容器名。Worker 与 RS 共享网络命名空间，使 RS 容器内的插件可以访问 `http://127.0.0.1:28082`；RS 容器未运行时脚本会停止部署。脚本会把 Worker 放到 `/opt/cpr-twofa/release/codex-proxy-twofa-worker`，使用现有的 `/opt/cpr-twofa/data/credentials` 和 `/opt/cpr-twofa/secrets/twofa-key` 挂载，并等待容器内 `/health` 返回 `ready=true`。空凭据目录首次安装时才会生成密钥；已有数据但缺少密钥会停止部署。
 
 Worker 就绪后，在 RS「插件管理」上传插件归档，核对安装包摘要，确认完整信任并启用。插件配置填写：
 
@@ -48,6 +49,7 @@ workerImageDigest = sha256:c2ac501b6e5892b42a2caba35a2c681d866b1a2863887bb7b82b9
 ```bash
 export PUBLIC_ORIGIN=https://cx.subarx.com
 export WORKER_IMAGE=ghcr.io/david1989sky/codex-proxy-twofa-worker:v0.2.0@sha256:<新版本 digest>
+export CPR_TWOFA_RS_CONTAINER=codex-proxy-rs-v380-codex-proxy-rs-1
 sudo -E bash companion-update.sh
 ```
 

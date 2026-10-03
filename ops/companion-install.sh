@@ -6,6 +6,7 @@ ROOT="${CPR_TWOFA_ROOT:-/opt/cpr-twofa}"
 RELEASE_DIR="${CPR_TWOFA_RELEASE_DIR:-$ROOT/release/codex-proxy-twofa-worker}"
 PUBLIC_ORIGIN="${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}"
 WORKER_IMAGE="${WORKER_IMAGE:?WORKER_IMAGE must be an immutable GHCR image reference}"
+RS_CONTAINER="${CPR_TWOFA_RS_CONTAINER:-codex-proxy-rs-v380-codex-proxy-rs-1}"
 
 case "$WORKER_IMAGE" in *@sha256:* ) ;; *) printf '%s\n' 'WORKER_IMAGE must include @sha256.' >&2; exit 1 ;; esac
 
@@ -24,5 +25,5 @@ mkdir -p "$RELEASE_DIR/ops"
 cp -p "$SOURCE_DIR/Dockerfile" "$SOURCE_DIR/entrypoint.sh" "$SOURCE_DIR/package.json" "$SOURCE_DIR/package-lock.json" "$RELEASE_DIR/"
 cp -p "$SOURCE_DIR/ops/compose.yaml" "$SOURCE_DIR/ops/provision-vault.sh" "$SOURCE_DIR/ops/deploy.sh" "$SOURCE_DIR/ops/rollback.sh" "$RELEASE_DIR/ops/"
 chmod 0555 "$RELEASE_DIR/entrypoint.sh" "$RELEASE_DIR/ops/"*.sh
-export CPR_TWOFA_ROOT="$ROOT" CPR_TWOFA_COMPOSE="$RELEASE_DIR/ops/compose.yaml"
+export CPR_TWOFA_ROOT="$ROOT" CPR_TWOFA_COMPOSE="$RELEASE_DIR/ops/compose.yaml" CPR_TWOFA_RS_CONTAINER="$RS_CONTAINER"
 bash "$RELEASE_DIR/ops/deploy.sh"
