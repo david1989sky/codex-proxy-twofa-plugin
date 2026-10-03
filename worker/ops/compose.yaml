@@ -2,7 +2,7 @@ services:
   worker:
     image: ${WORKER_IMAGE:?WORKER_IMAGE must be an immutable GHCR image reference}
     container_name: cpr-twofa-worker
-    network_mode: host
+    network_mode: "container:${CPR_TWOFA_RS_CONTAINER:?CPR_TWOFA_RS_CONTAINER is required}"
     init: true
     restart: unless-stopped
     read_only: true

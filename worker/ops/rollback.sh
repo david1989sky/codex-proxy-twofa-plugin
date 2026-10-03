@@ -8,6 +8,7 @@ BACKUP_DIR="$ROOT/backup/twofa-worker"
 IMAGE_FILE="$BACKUP_DIR/previous-image"
 ORIGIN_FILE="$BACKUP_DIR/current-origin"
 WORKER_CONTAINER="${CPR_TWOFA_WORKER_CONTAINER:-cpr-twofa-worker}"
+RS_CONTAINER="${CPR_TWOFA_RS_CONTAINER:-codex-proxy-rs-v380-codex-proxy-rs-1}"
 
 if [[ "${1:-}" == "--check" ]]; then
   [[ -s "$COMPOSE_FILE" && -s "$IMAGE_FILE" && -s "$ORIGIN_FILE" ]]
@@ -27,6 +28,7 @@ esac
 export WORKER_IMAGE="$IMAGE"
 export PUBLIC_ORIGIN="$ORIGIN"
 export CPR_TWOFA_ROOT="$ROOT"
+export CPR_TWOFA_RS_CONTAINER="$RS_CONTAINER"
 docker pull "$IMAGE"
 
 if docker inspect "$WORKER_CONTAINER" >/dev/null 2>&1; then
