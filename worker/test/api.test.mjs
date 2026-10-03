@@ -61,6 +61,149 @@ test('saved account summaries are paginated, filtered, and credential-free', asy
   assert.ok(!response.body.includes('credential_revoked'))
 })
 
+test('target reauthorization HTTP 401 marks a normal RS account as needing reauthorization until explicit success', async t => {
+  let attempts = 0
+  const account = { id: 'original', email: 'fixture@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'active', errorReason: null, outboundProxyEndpoint: null }
+  const record = {
+    credentials: { email: account.email, password: 'private-password', totpSecret: 'JBSWY3DPEHPK3PXP' },
+    updatedAt: '2026-10-01T00:00:00.000Z',
+  }
+  let markAttempts = 0
+  const vault = {
+    get: async id => id === account.id ? structuredClone(record) : null,
+    markFailure: async id => {
+      markAttempts++
+      if (markAttempts < 3) throw new Error('temporary fixture write failure')
+      if (id === account.id) record.reauthFailure = { reason: 'credential_invalid', updatedAt: '2026-10-04T00:00:00.000Z' }
+    },
+    clearFailure: async id => { if (id === account.id) delete record.reauthFailure },
+    put: async (id, credentials) => { record.credentials = structuredClone(credentials); delete record.reauthFailure },
+    delete: async () => {},
+  }
+  const reauthUpstream = async (path, cookie) => {
+    if (path === '/api/auth/status') return upstream(path, cookie)
+    if (path.startsWith('/api/admin/accounts/detail')) return { account }
+    if (path === '/api/admin/accounts?page=1&pageSize=100') return { items: [account], page: { totalPages: 1 } }
+    if (path.startsWith('/api/admin/proxies')) return { items: [], page: { totalPages: 1 } }
+    throw new Error(`unexpected upstream request: ${path}`)
+  }
+  const app = await createApp({
+    origin,
+    upstream: reauthUpstream,
+    vault,
+    run: async () => {
+      if (++attempts === 1) throw new PublicError(401, 'Codex Proxy 接口请求失败，请检查服务和登录状态')
+      return { accountId: account.id }
+    },
+  })
+  t.after(() => app.close())
+  async function wait(id) {
+    for (let i = 0; i < 150; i++) {
+      const result = (await app.inject({ url: `${prefix}/tasks/${id}`, headers })).json().data
+      if (!result.running) return result
+      await delay(5)
+    }
+    assert.fail('task did not settle')
+  }
+  let response = await app.inject({ method: 'POST', url: `${prefix}/accounts/${account.id}/reauthorize`, headers, payload: { submissionId: '401-failure' } })
+  assert.equal(response.statusCode, 200)
+  assert.equal((await wait(response.json().data.id)).items[0].status, 'failed')
+  assert.equal(markAttempts, 3)
+
+  response = await app.inject({ method: 'GET', url: `${prefix}/accounts`, headers })
+  const failed = response.json().data.items[0]
+  assert.equal(failed.status, 'error')
+  assert.equal(failed.errorReason, 'credential_invalid')
+  assert.equal(failed.needsReauth, true)
+
+  account.updatedAt = '2026-10-05T00:00:00.000Z'
+  response = await app.inject({ method: 'GET', url: `${prefix}/accounts`, headers })
+  const stillFailed = response.json().data.items[0]
+  assert.equal(stillFailed.status, 'error')
+  assert.equal(stillFailed.needsReauth, true)
+
+  account.status = 'quota_exhausted'
+  response = await app.inject({ method: 'GET', url: `${prefix}/accounts`, headers })
+  const quotaLimited = response.json().data.items[0]
+  assert.equal(quotaLimited.status, 'quota_exhausted')
+  assert.equal(quotaLimited.needsReauth, false)
+  account.status = 'active'
+
+  response = await app.inject({ method: 'POST', url: `${prefix}/accounts/${account.id}/reauthorize`, headers, payload: { submissionId: '401-recovery' } })
+  assert.equal(response.statusCode, 200)
+  assert.equal((await wait(response.json().data.id)).items[0].status, 'succeeded')
+  response = await app.inject({ method: 'GET', url: `${prefix}/accounts`, headers })
+  const recovered = response.json().data.items[0]
+  assert.equal(recovered.status, 'active')
+  assert.equal(recovered.errorReason, undefined)
+  assert.equal(recovered.needsReauth, false)
+})
+
+test('target 401 is not recorded when the administrator session has expired', async t => {
+  const account = { id: 'expired-session', email: 'expired-session@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'active', updatedAt: '2026-10-01T00:00:00.000Z', outboundProxyEndpoint: null }
+  let authChecks = 0
+  let markAttempts = 0
+  const vault = {
+    get: async id => id === account.id ? { credentials: { email: account.email, password: 'private-password', totpSecret: 'JBSWY3DPEHPK3PXP' } } : null,
+    markFailure: async () => { markAttempts++ },
+    delete: async () => {},
+  }
+  const fixtureUpstream = async (path, cookie) => {
+    if (path === '/api/auth/status') return ++authChecks === 2 ? { authenticated: false } : upstream(path, cookie)
+    if (path.startsWith('/api/admin/accounts/detail')) return { account }
+    if (path === '/api/admin/accounts?page=1&pageSize=100') return { items: [account], page: { totalPages: 1 } }
+    if (path.startsWith('/api/admin/proxies')) return { items: [], page: { totalPages: 1 } }
+    throw new Error(`unexpected upstream request: ${path}`)
+  }
+  const app = await createApp({ origin, upstream: fixtureUpstream, vault, run: async () => { throw new PublicError(401, 'fixture') } })
+  t.after(() => app.close())
+  const task = (await app.inject({ method: 'POST', url: `${prefix}/accounts/${account.id}/reauthorize`, headers, payload: { submissionId: 'expired-session' } })).json().data
+  for (let i = 0; i < 50; i++) {
+    if (!(await app.inject({ url: `${prefix}/tasks/${task.id}`, headers })).json().data.running) break
+    await delay(5)
+  }
+  const response = await app.inject({ method: 'GET', url: `${prefix}/accounts`, headers })
+  assert.equal(response.json().data.items[0].status, 'active')
+  assert.equal(response.json().data.items[0].needsReauth, false)
+  assert.equal(markAttempts, 0)
+})
+
+test('target 401 does not overwrite a newer account authorization', async t => {
+  const account = { id: 'changed-account', email: 'changed-account@example.com', provider: 'openai', authenticationKind: 'oauth', status: 'active', updatedAt: '2026-10-01T00:00:00.000Z', outboundProxyEndpoint: null }
+  let markAttempts = 0
+  const vault = {
+    get: async id => id === account.id ? { credentials: { email: account.email, password: 'private-password', totpSecret: 'JBSWY3DPEHPK3PXP' } } : null,
+    markFailure: async () => { markAttempts++ },
+    delete: async () => {},
+  }
+  const fixtureUpstream = async (path, cookie) => {
+    if (path === '/api/auth/status') return upstream(path, cookie)
+    if (path.startsWith('/api/admin/accounts/detail')) return { account }
+    if (path === '/api/admin/accounts?page=1&pageSize=100') return { items: [account], page: { totalPages: 1 } }
+    if (path.startsWith('/api/admin/proxies')) return { items: [], page: { totalPages: 1 } }
+    throw new Error(`unexpected upstream request: ${path}`)
+  }
+  const app = await createApp({
+    origin,
+    upstream: fixtureUpstream,
+    vault,
+    run: async () => {
+      account.updatedAt = '2026-10-05T00:00:00.000Z'
+      throw new PublicError(401, 'fixture')
+    },
+  })
+  t.after(() => app.close())
+  const task = (await app.inject({ method: 'POST', url: `${prefix}/accounts/${account.id}/reauthorize`, headers, payload: { submissionId: 'changed-account' } })).json().data
+  for (let i = 0; i < 50; i++) {
+    if (!(await app.inject({ url: `${prefix}/tasks/${task.id}`, headers })).json().data.running) break
+    await delay(5)
+  }
+  const response = await app.inject({ method: 'GET', url: `${prefix}/accounts`, headers })
+  assert.equal(response.json().data.items[0].status, 'active')
+  assert.equal(response.json().data.items[0].needsReauth, false)
+  assert.equal(markAttempts, 0)
+})
+
 test('admin guard rejects anonymous/key sessions and cross-origin/missing CSRF headers', async t => {
   const app = await createApp({ origin, upstream, run: async () => ({ accountId: 'ok' }) })
   t.after(() => app.close())
