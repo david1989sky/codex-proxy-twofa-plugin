@@ -95,6 +95,7 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
   const app = Fastify({ logger: false, bodyLimit: 140000, disableRequestLogging: true, ajv: { customOptions: { removeAdditional: false } } })
   const accountOperations = new Set()
   const reauthReasons = new Set(['credential_invalid', 'credential_expired'])
+  const localReauthFailures = new Map()
   async function withAccountLock(id, action) {
     if (accountOperations.has(id)) throw new PublicError(409, '此账号的 2FA 信息正在使用，请稍后重试')
     accountOperations.add(id)
@@ -104,7 +105,10 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
     let account
     try { ({ account } = await upstream(`/api/admin/accounts/detail?accountId=${encodeURIComponent(id)}`, cookie)) }
     catch (error) {
-      if (error instanceof PublicError && error.statusCode === 404) await vault?.delete(id)
+      if (error instanceof PublicError && error.statusCode === 404) {
+        localReauthFailures.delete(id)
+        await vault?.delete(id)
+      }
       throw error
     }
     if (account?.id !== id || account.provider !== 'openai' || account.authenticationKind !== 'oauth')
@@ -127,10 +131,34 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
     if (matches.length !== 1) throw new PublicError(400, '原账号代理无法唯一匹配，请检查代理配置或使用授权链接')
     return resolveProxy(matches[0].id, cookie, upstream, proxyMap, false)
   }
-  const jobs = new Jobs({ leaseMs, run: async input => {
+  const jobs = new Jobs({ leaseMs, onCredentialFailure: async ({ targetAccountId, cookie, targetAccountUpdatedAt, error }) => {
+    if (!targetAccountId || error?.statusCode !== 401) return
+    // A 401 from the worker's run can also mean that the administrator session expired.
+    // Only persist a credential failure when the same session still authenticates as admin.
+    let auth
+    try { auth = await upstream('/api/auth/status', cookie) } catch { return }
+    if (auth?.authenticated !== true || auth.session?.role !== 'admin') return
+    if (targetAccountUpdatedAt) {
+      let current
+      try { ({ account: current } = await upstream(`/api/admin/accounts/detail?accountId=${encodeURIComponent(targetAccountId)}`, cookie)) } catch { return }
+      if (current?.updatedAt && current.updatedAt !== targetAccountUpdatedAt) return
+    }
+    const failure = { reason: 'credential_invalid', updatedAt: new Date().toISOString() }
+    localReauthFailures.set(targetAccountId, failure)
+    if (typeof vault?.markFailure === 'function') {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          if (await vault.markFailure(targetAccountId, failure.reason) !== false) break
+        } catch {
+          if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+        }
+      }
+    }
+  }, run: async input => {
     if (input.targetAccountId) {
       const account = await accountDetail(input.targetAccountId, input.cookie)
       checkEmail(account, input.credentials)
+      input.targetAccountUpdatedAt = account.updatedAt
       input.proxy = await currentProxy(account, input.cookie)
     }
     return run(input)
@@ -138,6 +166,7 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
     const account = await accountDetail(accountId, cookie)
     checkEmail(account, credentials)
     await vault.put(accountId, credentials)
+    localReauthFailures.delete(accountId)
   } : undefined })
   const requireVault = () => { if (!vault) throw new PublicError(503, '2FA 信息保存服务未配置') }
   app.setErrorHandler((error, _request, reply) => {
@@ -168,15 +197,18 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
       for (const account of Array.isArray(data?.items) ? data.items : []) {
         if (account?.provider !== 'openai' || account?.authenticationKind !== 'oauth' || !account.id || !account.email) continue
         const saved = await vault.get(account.id)
-        const reason = reauthReasons.has(account.errorReason) ? account.errorReason : undefined
+        let localFailure = localReauthFailures.get(account.id) ?? saved?.reauthFailure
+        const localFailureApplies = localFailure && ['normal', 'active'].includes(account.status)
+        const reason = reauthReasons.has(account.errorReason) ? account.errorReason : localFailureApplies ? localFailure.reason : undefined
+        const status = account.status === 'error' || localFailureApplies ? 'error' : account.status
         items.push({
           id: account.id,
           email: account.email,
-          status: account.status,
+          status,
           errorReason: reason,
           saved: !!saved,
-          needsReauth: !!saved && account.status === 'error',
-          updatedAt: account.updatedAt ?? saved?.updatedAt,
+          needsReauth: !!saved && status === 'error',
+          updatedAt: account.updatedAt ?? localFailure?.updatedAt ?? saved?.updatedAt,
         })
       }
       if (page >= (Number(data?.page?.totalPages) || page)) break

@@ -30,6 +30,28 @@ test('vault encrypts credentials, persists across restart, and deletes only the 
   assert.equal(await vault.get('account-one'), null)
   assert.ok(await vault.get('account-two'))
 })
+
+test('vault persists credential failure metadata and clears it after a successful save', async t => {
+  const { options, openVault, vault } = await fixtureVault(t)
+  await vault.put('account-one', credentials)
+  await vault.markFailure('account-one', 'credential_invalid')
+  const reopened = await openVault(options)
+  assert.equal((await reopened.get('account-one')).reauthFailure.reason, 'credential_invalid')
+  await reopened.put('account-one', credentials)
+  assert.equal((await (await openVault(options)).get('account-one')).reauthFailure, undefined)
+})
+
+test('vault serializes failure cleanup with a concurrent credential save', async t => {
+  const { vault } = await fixtureVault(t)
+  await vault.put('account-one', credentials)
+  await vault.markFailure('account-one', 'credential_invalid')
+  const nextCredentials = { ...credentials, password: 'new-private-password' }
+  await Promise.all([vault.clearFailure('account-one'), vault.put('account-one', nextCredentials)])
+  const record = await vault.get('account-one')
+  assert.equal(record.credentials.password, nextCredentials.password)
+  assert.equal(record.reauthFailure, undefined)
+})
+
 test('vault rejects wrong or missing keys and tampered or swapped account records', async t => {
   const { options, openVault, vault } = await fixtureVault(t)
   await vault.put('account-one', credentials)

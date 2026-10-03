@@ -8,6 +8,7 @@ export async function openVault({ directory, keyFile }) {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   await chmod(directory, 0o700)
   const pathFor = id => join(directory, `${createHash('sha256').update(id).digest('hex')}.json`)
+  const recordLocks = new Map()
   function encrypt(id, value) {
     const iv = randomBytes(12)
     const cipher = createCipheriv('aes-256-gcm', key, iv)
@@ -37,6 +38,17 @@ export async function openVault({ directory, keyFile }) {
       try { await dir.sync() } finally { await dir.close() }
     } finally { await unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error }) }
   }
+  async function writeRecord(id, record) {
+    await atomicWrite(pathFor(id), encrypt(id, record))
+  }
+  function withRecordLock(id, action) {
+    const previous = recordLocks.get(id) ?? Promise.resolve()
+    const current = previous.catch(() => {}).then(action)
+    recordLocks.set(id, current)
+    return current.finally(() => {
+      if (recordLocks.get(id) === current) recordLocks.delete(id)
+    })
+  }
   // 密钥由部署单独提供，已有数据时绝不自动生成或替换密钥。
   const checkFile = join(directory, '.key-check')
   try {
@@ -48,14 +60,32 @@ export async function openVault({ directory, keyFile }) {
   return {
     async put(id, credentials) {
       if (!id || !credentials.email || !credentials.password || !credentials.totpSecret) throw new Error('Incomplete vault record')
-      await atomicWrite(pathFor(id), encrypt(id, { credentials, updatedAt: new Date().toISOString() }))
+      await withRecordLock(id, () => writeRecord(id, { credentials, updatedAt: new Date().toISOString() }))
+    },
+    async markFailure(id, reason) {
+      if (!id || reason !== 'credential_invalid') throw new Error('Invalid credential failure record')
+      return withRecordLock(id, async () => {
+        const record = await this.get(id)
+        if (!record) return false
+        await writeRecord(id, { ...record, reauthFailure: { reason, updatedAt: new Date().toISOString() } })
+        return true
+      })
+    },
+    async clearFailure(id) {
+      return withRecordLock(id, async () => {
+        const record = await this.get(id)
+        if (!record?.reauthFailure) return false
+        delete record.reauthFailure
+        await writeRecord(id, record)
+        return true
+      })
     },
     async get(id) {
       try { return decrypt(id, await readFile(pathFor(id), 'utf8')) }
       catch (error) { if (error.code === 'ENOENT') return null; throw error }
     },
     async delete(id) {
-      await unlink(pathFor(id)).catch(error => { if (error.code !== 'ENOENT') throw error })
+      await withRecordLock(id, () => unlink(pathFor(id)).catch(error => { if (error.code !== 'ENOENT') throw error }))
     },
   }
 }

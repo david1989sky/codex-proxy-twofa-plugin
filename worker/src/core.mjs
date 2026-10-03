@@ -51,9 +51,10 @@ function erase(credentials) {
 export class Jobs {
   #jobs = new Map()
   #timer
-  constructor({ run, persist, leaseMs = 90000, maxAgeMs = 1800000, retryDelayMs = 750 }) {
+  constructor({ run, persist, onCredentialFailure, leaseMs = 90000, maxAgeMs = 1800000, retryDelayMs = 750 }) {
     this.run = run
     this.persist = persist
+    this.onCredentialFailure = onCredentialFailure
     this.leaseMs = leaseMs
     this.maxAgeMs = maxAgeMs
     this.retryDelayMs = retryDelayMs
@@ -119,13 +120,15 @@ export class Jobs {
         item.attempts++
         item.status = 'starting'
         item.message = undefined
+        let runInput
         try {
-          const result = await this.run({
+          runInput = {
             credentials: item.credentials, settings: job.settings, cookie: job.cookie,
             targetAccountId: job.targetAccountId,
             proxy: job.proxy, outboundProxyId: job.outboundProxyId, signal: job.abort.signal,
             update: (status, controls) => { item.status = status; item.controls = controls },
-          })
+          }
+          const result = await this.run(runInput)
           item.accountId = result.accountId
           if (this.persist) {
             // OAuth 已经提交，保存失败只能提示补录，不能将账号标为可重试导入。
@@ -141,6 +144,9 @@ export class Jobs {
           item.status = 'succeeded'
           erase(item.credentials)
         } catch (error) {
+          if (!job.cancelled && this.onCredentialFailure) {
+            try { await this.onCredentialFailure({ targetAccountId: job.targetAccountId, cookie: job.cookie, targetAccountUpdatedAt: runInput.targetAccountUpdatedAt, error }) } catch {}
+          }
           item.status = job.cancelled ? 'cancelled' : 'failed'
           item.message = job.cancelled ? '已取消' : error instanceof PublicError ? error.message : '登录失败，请重试或使用单账号授权'
         } finally {
