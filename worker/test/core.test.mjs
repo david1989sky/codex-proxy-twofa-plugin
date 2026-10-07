@@ -30,8 +30,11 @@ test('invalid lines, duplicate identities and batch limits fail without echoing 
 test('OAuth nested desktop URL is validated and callback is fixed', () => {
   const inner = 'https://auth.openai.com/oauth/authorize?state=fixture-state&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback'
   assert.equal(oauthTarget(`https://chatgpt.com/codex/desktop-auth?authorize_url=${encodeURIComponent(inner)}`).state, 'fixture-state')
+  const current = inner.replace('localhost', '127.0.0.1')
+  assert.equal(oauthTarget(`https://chatgpt.com/codex/desktop-auth?authorize_url=${encodeURIComponent(current)}`).callback, 'http://127.0.0.1:1455/auth/callback')
   assert.throws(() => oauthTarget('https://evil.example/?state=x'))
   assert.throws(() => oauthTarget(inner.replace('localhost', 'evil.example')))
+  assert.throws(() => oauthTarget(current.replace('1455', '1456')))
 })
 test('tasks bind to session, propagate settings, retry only failures, erase success secrets', async () => {
   let attempts = 0

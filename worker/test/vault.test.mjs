@@ -41,6 +41,22 @@ test('vault persists credential failure metadata and clears it after a successfu
   assert.equal((await (await openVault(options)).get('account-one')).reauthFailure, undefined)
 })
 
+test('vault keeps pending account deletions across restart without exposing account ids', async t => {
+  const { options, openVault, vault } = await fixtureVault(t)
+  await vault.put('account-one', credentials)
+  await vault.markPendingDelete('account-one')
+  const reopened = await openVault(options)
+  assert.deepEqual(await reopened.pendingDeletions(), ['account-one'])
+  for (const file of await readdir(options.directory)) {
+    const contents = await readFile(join(options.directory, file), 'utf8')
+    assert.ok(!file.includes('account-one'))
+    assert.ok(!contents.includes('account-one'))
+  }
+  await reopened.delete('account-one')
+  await reopened.clearPendingDelete('account-one')
+  assert.deepEqual(await (await openVault(options)).pendingDeletions(), [])
+})
+
 test('vault serializes failure cleanup with a concurrent credential save', async t => {
   const { vault } = await fixtureVault(t)
   await vault.put('account-one', credentials)

@@ -8,6 +8,7 @@ export async function openVault({ directory, keyFile }) {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   await chmod(directory, 0o700)
   const pathFor = id => join(directory, `${createHash('sha256').update(id).digest('hex')}.json`)
+  const pendingPathFor = id => join(directory, `.pending-delete-${createHash('sha256').update(id).digest('hex')}.json`)
   const recordLocks = new Map()
   function encrypt(id, value) {
     const iv = randomBytes(12)
@@ -58,6 +59,24 @@ export async function openVault({ directory, keyFile }) {
     await atomicWrite(checkFile, encrypt('key-check', 'cpr-twofa-v1'))
   }
   return {
+    async markPendingDelete(id) {
+      if (!id) throw new Error('Missing account ID')
+      await atomicWrite(pendingPathFor(id), encrypt('pending-delete', { id }))
+    },
+    async pendingDeletions() {
+      const ids = []
+      for (const file of await readdir(directory)) {
+        if (!/^\.pending-delete-[a-f0-9]{64}\.json$/.test(file)) continue
+        const record = decrypt('pending-delete', await readFile(join(directory, file), 'utf8'))
+        if (typeof record?.id !== 'string' || pendingPathFor(record.id) !== join(directory, file))
+          throw new Error('Invalid pending deletion record')
+        ids.push(record.id)
+      }
+      return ids
+    },
+    async clearPendingDelete(id) {
+      await unlink(pendingPathFor(id)).catch(error => { if (error.code !== 'ENOENT') throw error })
+    },
     async put(id, credentials) {
       if (!id || !credentials.email || !credentials.password || !credentials.totpSecret) throw new Error('Incomplete vault record')
       await withRecordLock(id, () => writeRecord(id, { credentials, updatedAt: new Date().toISOString() }))

@@ -60,6 +60,10 @@ export function deleteTwoFaCredentials(accountId: string) {
   return request<{ deleted: boolean }>({ operation: 'deleteCredentials', accountId })
 }
 
+export function deleteTwoFaAccount(accountId: string) {
+  return request<{ deleted: boolean }>({ operation: 'deleteAccount', accountId })
+}
+
 export function reauthorizeTwoFaAccount(accountId: string, data: { submissionId: string, text?: string }) {
   return request<TwoFaTask>({ operation: 'reauthorize', accountId, ...data })
 }

@@ -7,16 +7,16 @@
 先下载 Release 中的插件归档、对应 `.sha256`、Worker bundle、bundle `.sha256`、`companion-manifest.json` 和两个 companion 脚本。核对摘要：
 
 ```bash
-sha256sum -c david1989sky.codex-proxy-twofa-0.1.12-x86_64-unknown-linux-gnu.tar.gz.sha256
-sha256sum -c codex-proxy-twofa-worker-0.1.12.tar.gz.sha256
+sha256sum -c david1989sky.codex-proxy-twofa-0.1.13-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c codex-proxy-twofa-worker-0.1.13.tar.gz.sha256
 ```
 
 从清单取出固定的镜像摘要，然后在 RS 主机执行：
 
 ```bash
 export PUBLIC_ORIGIN=https://cx.subarx.com
-export WORKER_IMAGE=ghcr.io/david1989sky/codex-proxy-twofa-worker:v0.1.12@sha256:<清单中的 digest>
-export WORKER_BUNDLE=/path/to/codex-proxy-twofa-worker-0.1.12.tar.gz
+export WORKER_IMAGE=ghcr.io/david1989sky/codex-proxy-twofa-worker:v0.1.13@sha256:<清单中的 digest>
+export WORKER_BUNDLE=/path/to/codex-proxy-twofa-worker-0.1.13.tar.gz
 export CPR_TWOFA_RS_CONTAINER=codex-proxy-rs-v380-codex-proxy-rs-1
 export CPR_TWOFA_RS_NETWORK=codex-proxy-rs-v380_default
 sudo -E bash companion-install.sh
@@ -41,8 +41,8 @@ workerImageDigest = sha256:<同一份清单中的 digest>
 
 ```bash
 export PUBLIC_ORIGIN=https://cx.subarx.com
-export WORKER_IMAGE=ghcr.io/david1989sky/codex-proxy-twofa-worker:v0.1.12@sha256:<新版本 digest>
-export WORKER_BUNDLE=/path/to/codex-proxy-twofa-worker-0.1.12.tar.gz
+export WORKER_IMAGE=ghcr.io/david1989sky/codex-proxy-twofa-worker:v0.1.13@sha256:<新版本 digest>
+export WORKER_BUNDLE=/path/to/codex-proxy-twofa-worker-0.1.13.tar.gz
 export CPR_TWOFA_RS_CONTAINER=codex-proxy-rs-v380-codex-proxy-rs-1
 export CPR_TWOFA_RS_NETWORK=codex-proxy-rs-v380_default
 sudo -E bash companion-update.sh

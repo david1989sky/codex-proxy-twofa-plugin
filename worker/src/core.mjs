@@ -38,7 +38,7 @@ export function oauthTarget(value, allowedOrigin = 'https://auth.openai.com') {
     url = new URL(url.searchParams.get('authorize_url'))
   const state = url.searchParams.get('state')
   const callback = url.searchParams.get('redirect_uri')
-  if (url.origin !== allowedOrigin || !state || callback !== 'http://localhost:1455/auth/callback')
+  if (url.origin !== allowedOrigin || !state || !['http://localhost:1455/auth/callback', 'http://127.0.0.1:1455/auth/callback'].includes(callback))
     throw new PublicError(502, 'OAuth 授权地址校验失败')
   return { url: url.href, state, callback }
 }

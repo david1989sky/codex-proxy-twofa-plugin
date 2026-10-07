@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { SavedTwoFaAccount, TwoFaTask } from './api/modules/twofa'
-import { LoaderCircle, Play, RefreshCcw, RotateCcw, Send, Square, Upload, X } from '@lucide/vue'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { controlTwoFaTask, getMigration, getSavedAccounts, getTwoFaScreen, getTwoFaStatus, getTwoFaTask, importMigration, reauthorizeTwoFaAccount, sendTwoFaInput, startTwoFaTask } from './api/modules/twofa'
+import { LoaderCircle, Play, RefreshCcw, RotateCcw, Send, Square, Trash2, Upload, X } from '@lucide/vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { controlTwoFaTask, deleteTwoFaAccount, getMigration, getSavedAccounts, getTwoFaScreen, getTwoFaStatus, getTwoFaTask, importMigration, reauthorizeTwoFaAccount, sendTwoFaInput, startTwoFaTask } from './api/modules/twofa'
 import { imageClickToViewport } from './manual-input.mjs'
 import { createRequestGate } from './operation.mjs'
 
@@ -22,6 +22,9 @@ const migrationLoading = ref(false)
 const savedAccounts = ref<SavedTwoFaAccount[]>([])
 const accountsLoading = ref(false)
 const accountActionId = ref<string>()
+const accountAction = ref<'reauthorize' | 'delete'>()
+const pendingDelete = ref<SavedTwoFaAccount>()
+const deleteDialog = ref<HTMLDialogElement>()
 const accountsRequest = createRequestGate()
 const statusRequest = createRequestGate()
 const controlAction = ref<'cancel' | 'retry' | 'delete'>()
@@ -152,9 +155,10 @@ async function start() {
 }
 
 async function reauthorize(account: SavedTwoFaAccount) {
-  if (!account.needsReauth || accountActionId.value || loading.value || task.value)
+  if (!account.saved || accountActionId.value || loading.value || task.value)
     return
   accountActionId.value = account.id
+  accountAction.value = 'reauthorize'
   error.value = ''
   notice.value = ''
   try {
@@ -169,6 +173,43 @@ async function reauthorize(account: SavedTwoFaAccount) {
   }
   finally {
     accountActionId.value = undefined
+    accountAction.value = undefined
+  }
+}
+
+async function requestDelete(account: SavedTwoFaAccount) {
+  if (accountActionId.value || loading.value || task.value)
+    return
+  pendingDelete.value = account
+  await nextTick()
+  deleteDialog.value?.showModal()
+}
+
+function cancelDelete() {
+  deleteDialog.value?.close()
+  pendingDelete.value = undefined
+}
+
+async function deleteAccount() {
+  const account = pendingDelete.value
+  if (!account || accountActionId.value || loading.value || task.value)
+    return
+  cancelDelete()
+  accountActionId.value = account.id
+  accountAction.value = 'delete'
+  error.value = ''
+  notice.value = ''
+  try {
+    await deleteTwoFaAccount(account.id)
+    notice.value = '账号已删除'
+    await refreshAccounts()
+  }
+  catch (cause) {
+    error.value = message(cause)
+  }
+  finally {
+    accountActionId.value = undefined
+    accountAction.value = undefined
   }
 }
 
@@ -445,11 +486,16 @@ onBeforeUnmount(() => {
                   {{ formatUpdatedAt(account.updatedAt) }}
                 </td>
                 <td class="px-3 py-2 text-right">
-                  <button v-if="account.needsReauth" class="cp-button cp-button-primary inline-flex items-center gap-1 text-cp-xs" type="button" :disabled="!!accountActionId || loading || !!task" @click="reauthorize(account)">
-                    <LoaderCircle v-if="accountActionId === account.id" class="size-3.5 cp-spin" aria-hidden="true" />
-                    {{ accountActionId === account.id ? '授权中…' : '一键重新授权' }}
-                  </button>
-                  <span v-else class="text-cp-xs text-cp-text-secondary">无需操作</span>
+                  <div class="inline-flex items-center justify-end gap-1">
+                    <button v-if="account.saved" class="cp-button cp-button-primary size-8 shrink-0 justify-center p-0" type="button" :disabled="!!accountActionId || loading || !!task" :aria-label="accountActionId === account.id && accountAction === 'reauthorize' ? '授权中' : '重新授权'" :title="accountActionId === account.id && accountAction === 'reauthorize' ? '授权中' : '重新授权'" @click="reauthorize(account)">
+                      <LoaderCircle v-if="accountActionId === account.id && accountAction === 'reauthorize'" class="size-3.5 cp-spin" aria-hidden="true" />
+                      <RotateCcw v-else class="size-3.5" aria-hidden="true" />
+                    </button>
+                    <button class="cp-button cp-button-tertiary size-8 shrink-0 justify-center p-0 text-cp-danger" type="button" :disabled="!!accountActionId || loading || !!task" :aria-label="accountActionId === account.id && accountAction === 'delete' ? '删除中' : '删除账号'" :title="accountActionId === account.id && accountAction === 'delete' ? '删除中' : '删除账号'" @click="requestDelete(account)">
+                      <LoaderCircle v-if="accountActionId === account.id && accountAction === 'delete'" class="size-3.5 cp-spin" aria-hidden="true" />
+                      <Trash2 v-else class="size-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -457,6 +503,23 @@ onBeforeUnmount(() => {
         </div>
       </Transition>
     </section>
+
+    <dialog ref="deleteDialog" class="w-[min(24rem,calc(100vw-2rem))] rounded-cp border border-cp-outline-variant bg-cp-surface p-4 text-cp-text backdrop:bg-black/50" aria-labelledby="delete-account-title" aria-describedby="delete-account-description" @cancel="pendingDelete = undefined">
+      <h2 id="delete-account-title" class="text-cp-lg font-medium">
+        删除账号
+      </h2>
+      <p id="delete-account-description" class="mt-2 break-all text-cp-sm text-cp-text-secondary">
+        永久删除 {{ pendingDelete?.email }} 的 RS 账号及已保存 2FA 信息？
+      </p>
+      <div class="mt-4 flex justify-end gap-2">
+        <button class="cp-button cp-button-secondary" type="button" @click="cancelDelete">
+          取消
+        </button>
+        <button class="cp-button cp-button-tertiary text-cp-danger" type="button" @click="deleteAccount">
+          删除
+        </button>
+      </div>
+    </dialog>
 
     <section class="flex min-w-0 flex-col gap-3 rounded-cp border border-cp-outline-variant p-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
