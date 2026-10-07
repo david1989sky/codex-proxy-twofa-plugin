@@ -2,7 +2,10 @@ services:
   worker:
     image: ${WORKER_IMAGE:?WORKER_IMAGE must be an immutable GHCR image reference}
     container_name: cpr-twofa-worker
-    network_mode: host
+    networks:
+      rs:
+        aliases:
+          - cpr-twofa-worker
     init: true
     restart: unless-stopped
     read_only: true
@@ -29,11 +32,17 @@ services:
       - ALL
     environment:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}
-      CPR_BASE_URL: http://127.0.0.1:28080
+      CPR_BASE_URL: http://codex-proxy-rs:8080
       PORT: '28082'
+      WORKER_LISTEN_HOST: 0.0.0.0
       BROWSER_HEADLESS: ${BROWSER_HEADLESS:-false}
     logging:
       driver: json-file
       options:
         max-size: 5m
         max-file: '2'
+
+networks:
+  rs:
+    external: true
+    name: ${CPR_TWOFA_RS_NETWORK:-codex-proxy-rs-v380_default}

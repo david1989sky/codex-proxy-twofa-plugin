@@ -32,7 +32,7 @@ pub enum WorkerError {
 impl fmt::Display for WorkerError {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            Self::InvalidBaseUrl => "Worker 地址必须是本机 HTTP 地址",
+            Self::InvalidBaseUrl => "Worker 地址必须是本机或专用容器服务地址",
             Self::InvalidPath => "插件请求路径不受支持",
             Self::RequestTooLarge => "请求正文超过 Worker 限制",
             Self::ResponseTooLarge => "Worker 响应超过插件限制",
@@ -48,8 +48,14 @@ impl std::error::Error for WorkerError {}
 impl WorkerClient {
     pub fn new(base_url: &str) -> Result<Self, WorkerError> {
         let base_url = Url::parse(base_url).map_err(|_| WorkerError::InvalidBaseUrl)?;
+        let loopback = matches!(base_url.host_str(), Some("127.0.0.1" | "localhost"));
+        let worker_service =
+            base_url.host_str() == Some("cpr-twofa-worker") && base_url.port() == Some(28082);
         if base_url.scheme() != "http"
-            || !matches!(base_url.host_str(), Some("127.0.0.1" | "localhost"))
+            || !(loopback || worker_service)
+            || !base_url.username().is_empty()
+            || base_url.password().is_some()
+            || base_url.path() != "/"
             || base_url.query().is_some()
             || base_url.fragment().is_some()
         {
@@ -187,6 +193,24 @@ mod tests {
     use super::{unwrap_worker_body, worker_path};
     use gateway_plugin_sdk::call::management::ManagementRequest;
     use reqwest::StatusCode;
+
+    #[test]
+    fn accepts_only_the_private_worker_service_or_loopback() {
+        assert!(super::WorkerClient::new("http://cpr-twofa-worker:28082").is_ok());
+        assert!(super::WorkerClient::new("http://127.0.0.1:28082").is_ok());
+        for url in [
+            "http://cpr-twofa-worker:28083",
+            "http://cpr-twofa-worker.evil:28082",
+            "https://cpr-twofa-worker:28082",
+            "http://172.25.0.3:28082",
+            "http://cpr-twofa-worker:28082/other",
+        ] {
+            assert!(
+                super::WorkerClient::new(url).is_err(),
+                "unexpectedly accepted {url}"
+            );
+        }
+    }
 
     #[test]
     fn maps_only_supported_worker_paths() {

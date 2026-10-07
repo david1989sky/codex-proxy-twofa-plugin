@@ -10,6 +10,6 @@ const vault = await openVault({ directory: process.env.CREDENTIALS_DIR || '/data
 const browser = await chromium.launch(browserLaunchOptions())
 const upstream = makeUpstream(process.env.CPR_BASE_URL || 'http://127.0.0.1:28080', origin)
 const app = await createApp({ origin, upstream, vault, run: createBrowserRunner({ browser, upstream }), proxyMap: JSON.parse(process.env.BROWSER_PROXY_MAP || '{}') })
-await app.listen({ host: '127.0.0.1', port: Number(process.env.PORT || 28082) })
-console.info('CPR 2FA worker listening on loopback')
+await app.listen({ host: process.env.WORKER_LISTEN_HOST || '127.0.0.1', port: Number(process.env.PORT || 28082) })
+console.info('CPR 2FA worker listening')
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, async () => { await app.close(); await browser.close(); process.exit(0) })
