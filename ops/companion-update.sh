@@ -6,6 +6,8 @@ RELEASE_DIR="${CPR_TWOFA_RELEASE_DIR:-$ROOT/release/codex-proxy-twofa-worker}"
 BACKUP_DIR="$ROOT/backup/twofa-worker"
 export CPR_TWOFA_ROOT="$ROOT" CPR_TWOFA_COMPOSE="$RELEASE_DIR/ops/compose.yaml"
 if [[ "${1:-}" == "--rollback" ]]; then
+  exec 9>"$ROOT/backup/worker-rebind.lock"
+  flock -x 9
   [[ -s "$BACKUP_DIR/previous-release-path" ]] || { printf '%s\n' 'No previous release snapshot recorded.' >&2; exit 1; }
   SNAPSHOT_DIR="$(<"$BACKUP_DIR/previous-release-path")"
   case "$SNAPSHOT_DIR" in "$BACKUP_DIR"/previous-release.*) ;; *) printf '%s\n' 'Invalid previous release path.' >&2; exit 1 ;; esac
@@ -15,8 +17,6 @@ if [[ "${1:-}" == "--rollback" ]]; then
     printf '%s\n' 'Previous release or current deployment inputs are incomplete.' >&2
     exit 1
   }
-  exec 9>"$ROOT/backup/worker-rebind.lock"
-  flock -x 9
   OLD_IMAGE="$(<"$SNAPSHOT_DIR/.worker-image")"
   OLD_ORIGIN="$(<"$SNAPSHOT_DIR/.public-origin")"
   NEW_IMAGE="$(<"$BACKUP_DIR/current-image")"

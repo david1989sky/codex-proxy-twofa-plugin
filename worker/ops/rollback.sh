@@ -41,6 +41,7 @@ docker compose -p cpr-twofa -f "$COMPOSE_FILE" up -d --no-build --force-recreate
 worker_ready() {
   docker exec "$WORKER_CONTAINER" node -e 'fetch("http://127.0.0.1:28082/health").then(async response => { const body = await response.text(); if (!response.ok || !body.includes(`"ready":true`)) process.exit(1) }).catch(() => process.exit(1))' || return 1
   docker exec "$RS_CONTAINER" sh -lc 'curl --fail --silent --max-time 3 http://cpr-twofa-worker:28082/health | grep -q '"'"'"ready":true'"'"'' || return 1
+  docker exec "$WORKER_CONTAINER" node -e 'fetch(`${process.env.CPR_BASE_URL}/api/auth/status`).then(async response => { await response.body?.cancel(); if (!response.ok) process.exit(1) }).catch(() => process.exit(1))' || return 1
 }
 
 for _ in $(seq 1 45); do
