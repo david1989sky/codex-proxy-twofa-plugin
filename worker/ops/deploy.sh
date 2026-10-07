@@ -9,6 +9,7 @@ IMAGE="${WORKER_IMAGE:?WORKER_IMAGE must be an immutable GHCR image reference}"
 ORIGIN="${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}"
 WORKER_CONTAINER="${CPR_TWOFA_WORKER_CONTAINER:-cpr-twofa-worker}"
 RS_CONTAINER="${CPR_TWOFA_RS_CONTAINER:-codex-proxy-rs-v380-codex-proxy-rs-1}"
+RS_NETWORK="${CPR_TWOFA_RS_NETWORK:-codex-proxy-rs-v380_default}"
 
 case "$IMAGE" in
   *@sha256:* ) ;;
@@ -17,6 +18,11 @@ esac
 [[ -f "$COMPOSE_FILE" ]] || { printf 'Compose file not found: %s\n' "$COMPOSE_FILE" >&2; exit 1; }
 [[ "$(docker inspect -f '{{.State.Running}}' "$RS_CONTAINER" 2>/dev/null || true)" == true ]] || {
   printf 'RS container is not running: %s\n' "$RS_CONTAINER" >&2
+  exit 1
+}
+docker network inspect "$RS_NETWORK" >/dev/null
+docker network inspect "$RS_NETWORK" --format '{{range .Containers}}{{println .Name}}{{end}}' | grep -Fxq "$RS_CONTAINER" || {
+  printf 'RS container is not attached to network: %s\n' "$RS_NETWORK" >&2
   exit 1
 }
 mkdir -p "$BACKUP_DIR"
@@ -35,31 +41,20 @@ export WORKER_IMAGE="$IMAGE"
 export PUBLIC_ORIGIN="$ORIGIN"
 export CPR_TWOFA_ROOT="$ROOT"
 export CPR_TWOFA_RS_CONTAINER="$RS_CONTAINER"
+export CPR_TWOFA_RS_NETWORK="$RS_NETWORK"
 
 docker pull "$IMAGE"
 bash "$COMPOSE_DIR/provision-vault.sh"
 
-# Recreate explicitly so container-network workers bind to the current RS namespace.
 if docker inspect "$WORKER_CONTAINER" >/dev/null 2>&1; then
   docker rm -f "$WORKER_CONTAINER" >/dev/null
 fi
 docker compose -p cpr-twofa -f "$COMPOSE_FILE" up -d --no-build --force-recreate worker
 
 worker_ready() {
-  docker exec "$WORKER_CONTAINER" node -e 'fetch("http://127.0.0.1:28082/health").then(async response => { const body = await response.text(); if (!response.ok || !body.includes(`"ready":true`)) process.exit(1) }).catch(() => process.exit(1))'
-
-  local network_mode target worker_pid target_pid worker_ns target_ns
-  network_mode="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$WORKER_CONTAINER")"
-  case "$network_mode" in
-    container:*)
-      target="${network_mode#container:}"
-      worker_pid="$(docker inspect -f '{{.State.Pid}}' "$WORKER_CONTAINER")"
-      target_pid="$(docker inspect -f '{{.State.Pid}}' "$target")"
-      worker_ns="$(readlink "/proc/$worker_pid/ns/net")"
-      target_ns="$(readlink "/proc/$target_pid/ns/net")"
-      [[ -n "$worker_ns" && "$worker_ns" == "$target_ns" ]]
-      ;;
-  esac
+  docker exec "$WORKER_CONTAINER" node -e 'fetch("http://127.0.0.1:28082/health").then(async response => { const body = await response.text(); if (!response.ok || !body.includes(`"ready":true`)) process.exit(1) }).catch(() => process.exit(1))' || return 1
+  docker exec "$RS_CONTAINER" sh -lc 'curl --fail --silent --max-time 3 http://cpr-twofa-worker:28082/health | grep -q '"'"'"ready":true'"'"'' || return 1
+  docker exec "$WORKER_CONTAINER" node -e 'fetch(`${process.env.CPR_BASE_URL}/api/auth/status`).then(async response => { await response.body?.cancel(); if (!response.ok) process.exit(1) }).catch(() => process.exit(1))' || return 1
 }
 
 ready=0

@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .configuration
         .get("workerBaseUrl")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("http://127.0.0.1:28082");
+        .unwrap_or("http://cpr-twofa-worker:28082");
     let digest = handshake
         .configuration
         .get("workerImageDigest")

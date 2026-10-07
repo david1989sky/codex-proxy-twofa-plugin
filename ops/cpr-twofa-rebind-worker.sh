@@ -24,6 +24,15 @@ network_namespace() {
   readlink "/proc/$pid/ns/net"
 }
 
+worker_network_mode="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$WORKER_CONTAINER" 2>/dev/null || true)"
+if [[ -n "$worker_network_mode" && "$worker_network_mode" != container:* ]]; then
+  if [[ "${1:-}" == "--check" ]]; then
+    printf 'worker_network_mode=%s\n' "$worker_network_mode"
+    printf '%s\n' 'worker_network_binding=stable'
+  fi
+  exit 0
+fi
+
 worker_pid="$(container_pid "$WORKER_CONTAINER")"
 rs_pid="$(container_pid "$RS_CONTAINER")"
 worker_ns="$(network_namespace "$worker_pid" 2>/dev/null || true)"

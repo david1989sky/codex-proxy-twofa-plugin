@@ -3,7 +3,7 @@
   "name": "codex-proxy-twofa",
   "displayName": "批量 2FA 授权",
   "publisher": "david1989sky",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Codex Proxy RS 批量 2FA 导入与自动授权 companion 插件",
   "license": "Apache-2.0",
   "author": "david1989sky",
@@ -20,8 +20,8 @@
     "properties": {
       "workerBaseUrl": {
         "type": "string",
-        "default": "http://127.0.0.1:28082",
-        "pattern": "^http://127\\.0\\.0\\.1(?::[0-9]{1,5})?$",
+        "default": "http://cpr-twofa-worker:28082",
+        "pattern": "^http://(?:127\\.0\\.0\\.1(?::[0-9]{1,5})?|cpr-twofa-worker:28082)$",
         "maxLength": 64
       },
       "workerImageDigest": {

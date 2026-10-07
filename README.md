@@ -42,7 +42,7 @@ PLUGIN_CLI="$PWD/.tools/bin/cpr-plugin" bash scripts/package.sh
 1. 在 GitHub Release 下载与服务器平台匹配的插件归档和 `.sha256` 文件。
 2. 在 RS 的「插件管理」上传归档，核对摘要并确认信任。
 3. 先按 `docs/install.md` 安装固定摘要的 companion Worker。
-4. 启用插件，确认 Worker 地址为 `http://127.0.0.1:28082`，填入已核对的 Worker 镜像摘要。
+4. 启用插件，确认 Worker 地址为 `http://cpr-twofa-worker:28082`，填入已核对的 Worker 镜像摘要。
 5. 打开「批量 2FA 授权」页面，检查 Worker 状态并执行一次迁移标记确认。
 
 插件安装代表信任插件进程。RS 插件机制不提供操作系统级沙箱；插件不会读取 PostgreSQL，也不会把密码、TOTP、密钥或真实截图提交到 GitHub。
