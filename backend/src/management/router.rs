@@ -73,6 +73,9 @@ enum Operation {
     DeleteCredentials {
         account_id: String,
     },
+    DeleteAccount {
+        account_id: String,
+    },
     Reauthorize {
         account_id: String,
         submission_id: String,
@@ -254,6 +257,11 @@ fn operation_request(operation: Operation) -> Result<(&'static str, String, Vec<
             format!("api/accounts/{account_id}/credentials"),
             Vec::new(),
         ),
+        Operation::DeleteAccount { account_id } => (
+            "DELETE",
+            format!("api/accounts/{account_id}/delete"),
+            Vec::new(),
+        ),
         Operation::Reauthorize {
             account_id,
             submission_id,
@@ -322,6 +330,7 @@ fn validate_operation_request(path: &str, body: &[u8]) -> Result<(), ApiError> {
                 | "tasks"
                 | "items"
                 | "credentials"
+                | "delete"
                 | "reauthorize"
                 | "cancel"
                 | "retry"
@@ -407,5 +416,20 @@ mod tests {
                 "outboundProxyId": null
             })
         );
+    }
+
+    #[test]
+    fn maps_delete_account_to_the_worker_account_delete_route() {
+        let operation: Operation = serde_json::from_value(json!({
+            "operation": "deleteAccount",
+            "accountId": "acct_fixture"
+        }))
+        .unwrap_or_else(|error| panic!("deleteAccount payload: {error}"));
+        let result = operation_request(operation);
+        assert!(result.is_ok(), "worker request should be accepted");
+        let (method, path, body) = result.unwrap_or_else(|_| unreachable!());
+        assert_eq!(method, "DELETE");
+        assert_eq!(path, "api/accounts/acct_fixture/delete");
+        assert!(body.is_empty());
     }
 }

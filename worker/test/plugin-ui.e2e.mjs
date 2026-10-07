@@ -42,6 +42,13 @@ test('plugin UI coalesces refreshes and shows operation feedback', async t => {
           await window.__accountsReady
           return { status: 200, contentType: 'application/json', body: new TextEncoder().encode(JSON.stringify(accountData)).buffer }
         }
+        if (input.method === 'POST' && input.path === 'api/request' && JSON.parse(input.body).operation === 'deleteAccount') {
+          const account = accountData.items.find(item => item.id === JSON.parse(input.body).accountId)
+          if (account) {
+            accountData.items.splice(accountData.items.indexOf(account), 1)
+          }
+          return { status: 200, contentType: 'application/json', body: new TextEncoder().encode(JSON.stringify({ deleted: true })).buffer }
+        }
         if (input.method === 'POST' && input.path === 'api/request') {
           const body = JSON.parse(input.body)
           if (body.operation === 'startTask') {
@@ -77,6 +84,7 @@ test('plugin UI coalesces refreshes and shows operation feedback', async t => {
   }, { accountData: { items: [
     { id: 'fixture', email: 'fixture@example.com', status: 'normal', saved: true, needsReauth: false },
     { id: 'reauthorize', email: 'reauthorize@example.com', status: 'error', errorReason: 'credential_revoked', saved: true, needsReauth: true },
+    { id: 'unsaved', email: 'unsaved@example.com', status: 'normal', saved: false, needsReauth: false },
   ] } })
   await page.goto(`http://127.0.0.1:${server.address().port}/`)
 
@@ -84,7 +92,23 @@ test('plugin UI coalesces refreshes and shows operation feedback', async t => {
   await refresh.waitFor()
   await page.evaluate(() => window.__releaseAccounts())
   await page.getByText('fixture@example.com', { exact: true }).waitFor()
-  await page.getByRole('button', { name: '一键重新授权', exact: true }).waitFor()
+  const savedRow = page.getByRole('row').filter({ hasText: 'reauthorize@example.com' })
+  await savedRow.getByRole('button', { name: '重新授权', exact: true }).waitFor()
+  await savedRow.getByRole('button', { name: '删除账号', exact: true }).waitFor()
+  assert.equal(await savedRow.locator('button').count(), 2)
+  assert.deepEqual(await savedRow.locator('button').evaluateAll(buttons => buttons.map(button => button.textContent?.trim())), ['', ''])
+  const unsavedRow = page.getByRole('row').filter({ hasText: 'unsaved@example.com' })
+  assert.equal(await unsavedRow.getByRole('button', { name: '重新授权' }).count(), 0)
+  assert.equal(await unsavedRow.getByRole('button', { name: '删除账号' }).count(), 1)
+  await savedRow.getByRole('button', { name: '删除账号', exact: true }).click()
+  const confirmation = page.getByRole('dialog', { name: '删除账号' })
+  await confirmation.getByText('reauthorize@example.com', { exact: false }).waitFor()
+  await confirmation.getByRole('button', { name: '取消' }).click()
+  assert.equal(calls.filter(call => call.method === 'POST' && call.path === 'api/request' && JSON.parse(call.body).operation === 'deleteAccount').length, 0)
+  await savedRow.getByRole('button', { name: '删除账号', exact: true }).click()
+  await confirmation.getByRole('button', { name: '删除', exact: true }).click()
+  assert.equal(calls.filter(call => call.method === 'POST' && call.path === 'api/request' && JSON.parse(call.body).operation === 'deleteAccount').length, 1)
+  await savedRow.waitFor({ state: 'detached' })
   const accountCallsBefore = calls.filter(call => call.path === 'api/accounts').length
 
   await page.evaluate(() => {

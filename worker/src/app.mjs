@@ -191,6 +191,13 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
   app.get('/health', () => ok({ ready: true }))
   app.get(`${prefix}/accounts`, async request => {
     requireVault()
+    for (const id of await vault.pendingDeletions?.() ?? []) {
+      try { await accountDetail(id, request.sessionCookie) }
+      catch (error) {
+        if (!(error instanceof PublicError && error.statusCode === 404)) throw error
+        await vault.clearPendingDelete(id)
+      }
+    }
     const items = []
     for (let page = 1; page <= 100; page++) {
       const data = await upstream(`/api/admin/accounts?page=${page}&pageSize=100`, request.sessionCookie)
@@ -227,6 +234,29 @@ export async function createApp({ origin, upstream, run, vault, proxyMap = {}, l
     requireVault()
     jobs.forgetTarget(request.params.accountId)
     await vault.delete(request.params.accountId)
+    return ok({ deleted: true })
+  }))
+  app.delete(`${prefix}/accounts/:accountId/delete`, { schema: { params: accountParams } }, async request => withAccountLock(request.params.accountId, async () => {
+    requireVault()
+    jobs.assertTargetIdle(request.params.accountId)
+    let account
+    try { account = await accountDetail(request.params.accountId, request.sessionCookie) }
+    catch (error) {
+      if (error instanceof PublicError && error.statusCode === 404) {
+        await vault.clearPendingDelete?.(request.params.accountId)
+        jobs.forgetTarget(request.params.accountId)
+        return ok({ deleted: true })
+      }
+      throw error
+    }
+    await vault.markPendingDelete?.(account.id)
+    const result = await upstream('/api/admin/accounts/delete', request.sessionCookie, { provider: 'openai', accountIds: [account.id] })
+    if (result?.deletedCount !== 1 || result.accountIds?.length !== 1 || result.accountIds[0] !== account.id)
+      throw new PublicError(502, 'RS 未确认账号删除')
+    jobs.forgetTarget(account.id)
+    await vault.delete(account.id)
+    await vault.clearPendingDelete?.(account.id)
+    localReauthFailures.delete(account.id)
     return ok({ deleted: true })
   }))
   app.post(`${prefix}/accounts/:accountId/reauthorize`, { schema: { params: accountParams, body: {

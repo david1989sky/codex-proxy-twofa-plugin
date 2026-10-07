@@ -86,7 +86,7 @@ test('real browser completes password + TOTP + consent, masks takeover, validate
     }
     if (url.pathname === '/verified' || url.pathname === '/consent') return html('<h1>Consent</h1><form method="POST" action="/callback"><button name="authorize">Allow</button></form>')
     if (url.pathname === '/callback') {
-      res.writeHead(302, { location: `http://localhost:1455/auth/callback?code=fixture-code&state=${wrongState ? 'wrong' : 'fixture-state'}` })
+      res.writeHead(302, { location: `http://127.0.0.1:1455/auth/callback?code=fixture-code&state=${wrongState ? 'wrong' : 'fixture-state'}` })
       return res.end()
     }
     res.writeHead(404).end()
@@ -102,12 +102,13 @@ test('real browser completes password + TOTP + consent, masks takeover, validate
     assert.equal(cookie, 'fixture-cookie')
     if (path.endsWith('/start')) {
       assert.equal(body.accountId, reauthorizing ? 'fixture-account' : undefined)
-      return { flowId: 'fixture-flow', authorizationUrl: `${origin}/oauth/authorize?state=fixture-state&redirect_uri=${encodeURIComponent('http://localhost:1455/auth/callback')}` }
+      return { flowId: 'fixture-flow', authorizationUrl: `${origin}/oauth/authorize?state=fixture-state&redirect_uri=${encodeURIComponent('http://127.0.0.1:1455/auth/callback')}` }
     }
     assert.equal(body.flowId, 'fixture-flow')
     if (reauthorizing) assert.equal(Object.hasOwn(body, 'settings'), false)
     else assert.equal(body.settings.weight, 2)
     assert.equal(new URL(body.callbackUrl).searchParams.get('code'), 'fixture-code')
+    assert.equal(new URL(body.callbackUrl).host, '127.0.0.1:1455')
     completeCount++
     return { accountId: 'fixture-account' }
   }
